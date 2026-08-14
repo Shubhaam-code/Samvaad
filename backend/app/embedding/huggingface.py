@@ -412,6 +412,24 @@ def create_huggingface_embedder(
     )
 
 
+def is_model_cached(model_name: str = DEFAULT_MODEL_NAME) -> bool:
+    """Check whether a HuggingFace model is already cached locally.
+
+    Args:
+        model_name: HuggingFace model identifier
+
+    Returns:
+        True if the model is cached locally; False otherwise.
+    """
+    try:
+        from transformers import AutoModel, AutoTokenizer
+        AutoTokenizer.from_pretrained(model_name, local_files_only=True)
+        AutoModel.from_pretrained(model_name, local_files_only=True)
+        return True
+    except Exception:
+        return False
+
+
 __all__ = [
     "DEFAULT_MODEL_NAME",
     "HuggingFaceEmbedder",

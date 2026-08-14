@@ -1,0 +1,67 @@
+# --- OS / Editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- Secrets / Env ---
+.env
+.env.*
+!.env.example
+backend/.env
+frontend/.env
+frontend/.env.*
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+backend/.venv/
+backend/venv/
+
+# --- Node / Vite / React ---
+node_modules/
+dist/
+build/
+.vite/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Data caches (keep data/ folder itself, ignore large transient files) ---
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# --- Phase 2.1 dataset analysis outputs ---
+data/dataset_report.json
+data/dataset_report.md
+
+# --- Hugging Face cache (datasets + models) ---
+backend/.cache/
+backend/hf_cache/
+.cache/
+hf_cache/
+**/datasets--*/
+**/models--*/
+**/blobs/
+
+# --- Misc ---
+*.tmp
+*.bak

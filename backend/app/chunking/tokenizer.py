@@ -248,8 +248,11 @@ def create_huggingface_tokenizer(
     """
     try:
         from transformers import AutoTokenizer
-    except ImportError as e:
-        raise RuntimeError("transformers package is required to load HuggingFace tokenizers") from e
+    except (ImportError, OSError) as e:
+        raise RuntimeError(
+            f"Failed to load HuggingFace tokenizer '{model_name_or_path}': "
+            f"transformers package failed to load: {e}"
+        ) from e
 
     try:
         tokenizer = AutoTokenizer.from_pretrained(

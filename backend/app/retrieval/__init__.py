@@ -16,6 +16,12 @@ real: only the existing real embedder and vector store are used.
 
 from .models import RetrievalResult, RetrievedChunk
 from .orchestrator import RetrievalError, RetrievalOrchestrator, validate_query
+from .reranker import (
+    BaseReranker,
+    FastReranker,
+    PassThroughReranker,
+    RerankerProtocol,
+)
 from .resolver import (
     ChunkResolver,
     ChunkResolverProtocol,
@@ -27,6 +33,11 @@ __all__ = [
     # Data models
     "RetrievedChunk",
     "RetrievalResult",
+    # Reranker
+    "BaseReranker",
+    "FastReranker",
+    "PassThroughReranker",
+    "RerankerProtocol",
     # Resolver
     "ChunkResolver",
     "ChunkResolverProtocol",

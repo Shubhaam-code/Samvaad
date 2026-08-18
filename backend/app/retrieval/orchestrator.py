@@ -96,6 +96,7 @@ class RetrievalOrchestrator:
         vector_store: object,
         resolver: ChunkResolverProtocol,
         guardrail_pipeline: Optional[GuardrailPipeline] = None,
+        reranker: Optional[object] = None,
         top_k: int = 5,
     ) -> None:
         if embedder is None or not callable(getattr(embedder, "encode", None)):
@@ -110,12 +111,17 @@ class RetrievalOrchestrator:
             raise ValueError(
                 "resolver must implement resolve(chunk_ids) -> list[Chunk]"
             )
+        if reranker is not None and not callable(getattr(reranker, "rerank", None)):
+            raise ValueError(
+                "reranker must implement rerank(query, candidates, top_k) -> list[RetrievedChunk]"
+            )
         validate_top_k(top_k)
 
         self._embedder = embedder
         self._vector_store = vector_store
         self._resolver = resolver
         self._guardrail_pipeline = guardrail_pipeline or GuardrailPipeline()
+        self._reranker = reranker
         self._top_k = top_k
 
     @property
@@ -134,6 +140,11 @@ class RetrievalOrchestrator:
         return self._resolver
 
     @property
+    def reranker(self) -> Optional[object]:
+        """The configured reranker instance, if any."""
+        return self._reranker
+
+    @property
     def guardrail_pipeline(self) -> GuardrailPipeline:
         """The configured guardrail pipeline instance."""
         return self._guardrail_pipeline
@@ -143,24 +154,32 @@ class RetrievalOrchestrator:
         """Default number of nearest neighbors to retrieve."""
         return self._top_k
 
-    def retrieve(self, query: str, top_k: Optional[int] = None) -> RetrievalResult:
+    def retrieve(
+        self,
+        query: str,
+        top_k: Optional[int] = None,
+        top_n_candidates: Optional[int] = None,
+    ) -> RetrievalResult:
         """Run the full retrieval pipeline for a single query.
 
         Stages (all real):
         1. Validate the query (ValueError on invalid input).
         2. Run the input guardrail. If the query is rejected
            (OFF_TOPIC_REJECTED), return immediately: embedding, vector
-           search, and resolution are NEVER called.
+           search, resolution, and reranking are NEVER called.
         3. Embed the query with the configured embedder.
-        4. Search the vector store for top_k nearest neighbors.
+        4. Search the vector store for candidates.
         5. Resolve hit chunk ids to actual Chunk evidence.
-        6. Return a RetrievalResult preserving search order/scores,
-           carrying missing_chunk_ids, and recording per-stage latencies.
+        6. If a reranker is configured, rescore candidates to top_k.
+        7. Return a RetrievalResult carrying resolved evidence,
+           missing_chunk_ids, and real per-stage latencies.
 
         Args:
             query: User query to retrieve evidence for
-            top_k: Optional number of neighbors to retrieve
+            top_k: Optional number of final chunks to retrieve
                 (defaults to the orchestrator's configured top_k)
+            top_n_candidates: Optional initial candidate pool size for vector search
+                before reranking (defaults to max(top_k * 3, 10))
 
         Returns:
             RetrievalResult with guardrail verdict, resolved evidence,
@@ -168,7 +187,7 @@ class RetrievalOrchestrator:
 
         Raises:
             ValueError: If query is invalid or top_k is invalid
-            RetrievalError: If embedding, search, or resolution fails
+            RetrievalError: If embedding, search, resolution, or reranking fails
         """
         validate_query(query)
         k = self._top_k if top_k is None else top_k
@@ -185,7 +204,7 @@ class RetrievalOrchestrator:
         latencies["guardrail_ms"] = _elapsed_ms(start)
 
         if guardrail_result.verdict == GuardrailVerdict.OFF_TOPIC_REJECTED:
-            # Short-circuit: embedding, search, and resolution are NEVER called.
+            # Short-circuit: embedding, search, resolution, and reranking are NEVER called.
             return RetrievalResult(
                 query=query,
                 allowed=False,
@@ -201,10 +220,16 @@ class RetrievalOrchestrator:
             raise RetrievalError(f"Query embedding failed: {exc}") from exc
         latencies["embedding_ms"] = _elapsed_ms(start)
 
+        # Determine candidate search pool size
+        if self._reranker is not None:
+            search_k = top_n_candidates if top_n_candidates is not None else max(k * 3, 10)
+        else:
+            search_k = k
+
         # Stage 3: vector store search
         start = time.perf_counter()
         try:
-            search_results = self._vector_store.search(query_vector, k)
+            search_results = self._vector_store.search(query_vector, search_k)
         except Exception as exc:
             raise RetrievalError(f"Vector search failed: {exc}") from exc
         latencies["search_ms"] = _elapsed_ms(start)
@@ -236,6 +261,17 @@ class RetrievalOrchestrator:
                         chunk=chunk,
                     )
                 )
+
+        # Stage 5: optional reranking
+        if self._reranker is not None and retrieved:
+            start = time.perf_counter()
+            try:
+                retrieved = self._reranker.rerank(query, retrieved, top_k=k)
+            except Exception as exc:
+                raise RetrievalError(f"Reranking failed: {exc}") from exc
+            latencies["rerank_ms"] = _elapsed_ms(start)
+        else:
+            retrieved = retrieved[:k]
 
         return RetrievalResult(
             query=query,

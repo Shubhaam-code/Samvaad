@@ -30,7 +30,24 @@ from .base import (
 )
 from .config import LLMConfig, LLMProvider
 from .fake import FakeLLM, create_fake_llm
+from .groq_llm import (
+    DEFAULT_GROQ_BASE_URL,
+    DEFAULT_GROQ_MODEL,
+    GroqLLM,
+    is_groq_configured,
+)
 from .models import FinishReason, LLMRequest, LLMResponse, LLMUsage
+from .openai_compatible import (
+    DEFAULT_BASE_URL,
+    DEFAULT_MODEL_NAME,
+    OpenAICompatibleLLM,
+    is_openai_compatible_configured,
+)
+from .prompt_engine import (
+    DEFAULT_GROUNDED_SYSTEM_PROMPT,
+    build_grounded_rag_prompt,
+    extract_citations,
+)
 from .types import LLMPrompt, LLMText
 
 __all__ = [
@@ -60,4 +77,18 @@ __all__ = [
     # Fake provider (tests/offline dev)
     "FakeLLM",
     "create_fake_llm",
+    # OpenAI compatible provider
+    "DEFAULT_BASE_URL",
+    "DEFAULT_MODEL_NAME",
+    "OpenAICompatibleLLM",
+    "is_openai_compatible_configured",
+    # Groq Cloud provider
+    "DEFAULT_GROQ_BASE_URL",
+    "DEFAULT_GROQ_MODEL",
+    "GroqLLM",
+    "is_groq_configured",
+    # Prompt Engine & Citations
+    "DEFAULT_GROUNDED_SYSTEM_PROMPT",
+    "build_grounded_rag_prompt",
+    "extract_citations",
 ]

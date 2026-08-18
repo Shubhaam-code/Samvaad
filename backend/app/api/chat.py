@@ -132,9 +132,14 @@ def chat(
         _MS_ROUND,
     )
 
-    # Stage 5: LLM generation (real provider only)
+    # Stage 5: LLM generation (real provider with grounded context)
     t_stage = time.perf_counter()
-    llm_response = llm.generate(LLMRequest(prompt=query, system_prompt=SYSTEM_PROMPT))
+    from app.llm.prompt_engine import build_grounded_rag_prompt, extract_citations  # noqa: PLC0415
+    sys_prompt, user_prompt = build_grounded_rag_prompt(
+        query=query,
+        retrieved_chunks=retrieval_result.retrieved_chunks,
+    )
+    llm_response = llm.generate(LLMRequest(prompt=user_prompt, system_prompt=sys_prompt))
     llm_ms = _ms(t_stage)
 
     # Stage 6: post-generation grounding verification
@@ -143,16 +148,8 @@ def chat(
     grounding_result = grounding_verifier.verify(llm_response.text, evidence_chunks)
     grounding_ms = _ms(t_stage)
 
-    # Stage 7: citations from actual retrieved Chunk evidence
-    citations = [
-        Citation(
-            chunk_id=item.chunk_id,
-            document_id=item.chunk.document_id,
-            score=item.score,
-            text=item.chunk.chunk_text,
-        )
-        for item in retrieval_result.retrieved_chunks
-    ]
+    # Stage 7: structured citations from actual retrieved Chunk evidence
+    citations = extract_citations(retrieval_result.retrieved_chunks)
 
     total_ms = _ms(t_total)
 

@@ -101,13 +101,19 @@ def get_llm() -> Optional[BaseLLM]:
             settings.groq_model or settings.llm_model,
             settings.llm_timeout_seconds,
         )
+        from app.llm.harness import ModelOrchestrationHarness  # noqa: PLC0415
         with _llm_cache_lock:
             if key not in _llm_cache:
-                _llm_cache[key] = GroqLLM(
+                raw_llm = GroqLLM(
                     api_key=api_key,
                     base_url=settings.groq_base_url,
                     model_name=settings.groq_model or settings.llm_model,
                     timeout_seconds=settings.llm_timeout_seconds,
+                )
+                _llm_cache[key] = ModelOrchestrationHarness(
+                    provider_llm=raw_llm,
+                    max_retries=2,
+                    base_backoff_seconds=0.2,
                 )
             return _llm_cache[key]
 
@@ -128,13 +134,19 @@ def get_llm() -> Optional[BaseLLM]:
         settings.llm_model or DEFAULT_MODEL_NAME,
         settings.llm_timeout_seconds,
     )
+    from app.llm.harness import ModelOrchestrationHarness  # noqa: PLC0415
     with _llm_cache_lock:
         if key not in _llm_cache:
-            _llm_cache[key] = OpenAICompatibleLLM(
+            raw_llm = OpenAICompatibleLLM(
                 api_key=settings.llm_api_key,
                 base_url=base_url,
                 model_name=settings.llm_model or DEFAULT_MODEL_NAME,
                 timeout_seconds=settings.llm_timeout_seconds,
+            )
+            _llm_cache[key] = ModelOrchestrationHarness(
+                provider_llm=raw_llm,
+                max_retries=2,
+                base_backoff_seconds=0.2,
             )
         return _llm_cache[key]
 

@@ -49,6 +49,11 @@ data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 
+# --- RAG index artifacts (backend/data) ---
+backend/data/index/
+backend/data/processed/
+backend/data/raw/
+
 # --- Phase 2.1 dataset analysis outputs ---
 data/dataset_report.json
 data/dataset_report.md

@@ -1,5 +1,6 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
+python-multipart>=0.0.12
 pydantic==2.9.2
 pydantic-settings==2.5.2
 
@@ -10,6 +11,9 @@ pyarrow==18.0.0
 
 # Tokenization (Phase 3.4)
 transformers==4.45.0
+
+# LLM provider (Phase 6.4)
+openai==1.99.9
 
 # Testing
 pytest==8.3.3

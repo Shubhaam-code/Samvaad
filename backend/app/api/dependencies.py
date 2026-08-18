@@ -40,10 +40,12 @@ from app.llm.openai_compatible import (
 )
 from app.retrieval.orchestrator import RetrievalOrchestrator
 from app.settings import settings
+from app.stt.base import BaseSTT
 from app.stt.openai_whisper import (
     OpenAIWhisperSTT,
     is_openai_whisper_configured,
 )
+from app.tts.base import BaseTTS
 from app.tts.openai_tts import (
     OpenAITTS,
     is_openai_tts_configured,
@@ -119,22 +121,37 @@ def get_llm() -> Optional[OpenAICompatibleLLM]:
 # ---------------------------------------------------------------------------
 
 
-def get_stt() -> Optional[OpenAIWhisperSTT]:
-    """Resolve the configured real STT provider.
+def get_stt() -> Optional[BaseSTT]:
+    """Resolve the configured real STT provider (Sarvam AI or OpenAI Whisper).
 
     FakeSTT is NEVER returned here. Tests inject it via dependency_overrides.
 
-    The STT provider is considered configured when:
-    - ``STT_API_KEY`` (or ``LLM_API_KEY``) is non-empty, OR
-    - ``STT_BASE_URL`` is set to a non-default value (local compatible server).
-
-    STT_BASE_URL absent / empty → official OpenAI Whisper API.
-    STT_BASE_URL set → OpenAI-compatible Whisper endpoint (e.g. local server).
-
     Returns:
-        A cached OpenAIWhisperSTT when the provider is configured,
+        A cached BaseSTT (SarvamSTT or OpenAIWhisperSTT) when the provider is configured,
         or None when no real provider is configured.
     """
+    if settings.stt_provider == "sarvam":
+        from app.stt.sarvam_stt import SarvamSTT, is_sarvam_stt_configured  # noqa: PLC0415
+        api_key = settings.sarvam_api_key or settings.stt_api_key
+        if not is_sarvam_stt_configured(api_key):
+            return None
+        key: tuple[object, ...] = (
+            "sarvam",
+            api_key,
+            settings.sarvam_stt_model,
+            settings.stt_timeout_seconds,
+            settings.stt_max_audio_size_mb,
+        )
+        with _stt_cache_lock:
+            if key not in _stt_cache:
+                _stt_cache[key] = SarvamSTT(
+                    api_key=api_key,
+                    model=settings.sarvam_stt_model,
+                    timeout_seconds=settings.stt_timeout_seconds,
+                    max_audio_size_mb=int(settings.stt_max_audio_size_mb * 1024 * 1024),
+                )
+            return _stt_cache[key]
+
     if settings.stt_provider != "openai_whisper":
         return None
 
@@ -154,6 +171,7 @@ def get_stt() -> Optional[OpenAIWhisperSTT]:
         return None
 
     key: tuple[object, ...] = (
+        "openai_whisper",
         api_key,
         base_url_override,
         settings.stt_model or "whisper-1",
@@ -179,22 +197,41 @@ def get_stt() -> Optional[OpenAIWhisperSTT]:
 # ---------------------------------------------------------------------------
 
 
-def get_tts() -> Optional[OpenAITTS]:
-    """Resolve the configured real TTS provider.
+def get_tts() -> Optional[BaseTTS]:
+    """Resolve the configured real TTS provider (Sarvam AI or OpenAI TTS).
 
     FakeTTS is NEVER returned here. Tests inject it via dependency_overrides.
 
-    The TTS provider is considered configured when:
-    - ``TTS_API_KEY`` (or ``LLM_API_KEY``) is non-empty, OR
-    - ``TTS_BASE_URL`` is set to a non-default value (local compatible server).
-
-    TTS_BASE_URL absent / empty → official OpenAI TTS API.
-    TTS_BASE_URL set → OpenAI-compatible TTS endpoint (e.g. local server).
-
     Returns:
-        A cached OpenAITTS when the provider is configured,
+        A cached BaseTTS (SarvamTTS or OpenAITTS) when the provider is configured,
         or None when no real provider is configured.
     """
+    if settings.tts_provider == "sarvam":
+        from app.tts.sarvam_tts import SarvamTTS, is_sarvam_tts_configured  # noqa: PLC0415
+        api_key = settings.sarvam_api_key or settings.tts_api_key
+        if not is_sarvam_tts_configured(api_key):
+            return None
+        key: tuple[object, ...] = (
+            "sarvam",
+            api_key,
+            settings.sarvam_tts_model,
+            settings.sarvam_speaker,
+            settings.tts_timeout_seconds,
+            settings.tts_max_text_length,
+            settings.tts_max_audio_size_mb,
+        )
+        with _tts_cache_lock:
+            if key not in _tts_cache:
+                _tts_cache[key] = SarvamTTS(
+                    api_key=api_key,
+                    model=settings.sarvam_tts_model,
+                    speaker=settings.sarvam_speaker,
+                    timeout_seconds=settings.tts_timeout_seconds,
+                    max_text_length=settings.tts_max_text_length,
+                    max_audio_size_mb=settings.tts_max_audio_size_mb,
+                )
+            return _tts_cache[key]
+
     if settings.tts_provider != "openai_tts":
         return None
 
@@ -211,6 +248,7 @@ def get_tts() -> Optional[OpenAITTS]:
         return None
 
     key: tuple[object, ...] = (
+        "openai_tts",
         api_key,
         base_url_override,
         settings.tts_model or "tts-1",
@@ -226,7 +264,7 @@ def get_tts() -> Optional[OpenAITTS]:
             _tts_cache[key] = OpenAITTS(
                 api_key=api_key,
                 base_url=base_url_override,
-                model=settings.tts_model or "tts-1",
+                model_name=settings.tts_model or "tts-1",
                 voice=settings.tts_voice or "alloy",
                 output_format=settings.tts_output_format or "mp3",
                 speed=settings.tts_speed,

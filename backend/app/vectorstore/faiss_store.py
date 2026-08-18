@@ -90,6 +90,11 @@ class FaissVectorStore(BaseVectorStore):
         return self._dimension
 
     @property
+    def records(self) -> List[VectorRecord]:
+        """List of all VectorRecord metadata in insertion order."""
+        return list(self._records)
+
+    @property
     def embedding_model_name(self) -> Optional[str]:
         """Optional embedding model identifier."""
         return self._embedding_model_name

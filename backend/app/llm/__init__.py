@@ -28,7 +28,7 @@ from .base import (
     validate_temperature,
     validate_top_p,
 )
-from .config import LLMConfig, LLMProvider
+from .circuit_breaker import CircuitBreaker, CircuitBreakerError, CircuitBreakerState
 from .fake import FakeLLM, create_fake_llm
 from .groq_llm import (
     DEFAULT_GROQ_BASE_URL,
@@ -36,6 +36,7 @@ from .groq_llm import (
     GroqLLM,
     is_groq_configured,
 )
+from .harness import DEFAULT_FALLBACK_MESSAGE, ModelOrchestrationHarness
 from .models import FinishReason, LLMRequest, LLMResponse, LLMUsage
 from .openai_compatible import (
     DEFAULT_BASE_URL,
@@ -91,4 +92,10 @@ __all__ = [
     "DEFAULT_GROUNDED_SYSTEM_PROMPT",
     "build_grounded_rag_prompt",
     "extract_citations",
+    # Resilience Harness & Circuit Breaker (Phase 5.5)
+    "CircuitBreaker",
+    "CircuitBreakerState",
+    "CircuitBreakerError",
+    "ModelOrchestrationHarness",
+    "DEFAULT_FALLBACK_MESSAGE",
 ]

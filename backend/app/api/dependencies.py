@@ -32,6 +32,7 @@ from app.guardrails.grounding_verifier import GroundingVerifier
 from app.guardrails.pipeline import GuardrailPipeline
 from app.embedding.huggingface import HuggingFaceEmbedder
 from app.indexing.loader import index_exists, load_index, resolve_index_dir
+from app.llm.base import BaseLLM
 from app.llm.openai_compatible import (
     DEFAULT_BASE_URL as LLM_DEFAULT_BASE_URL,
     DEFAULT_MODEL_NAME,
@@ -79,16 +80,37 @@ _orchestrator_cache_lock = threading.Lock()
 # ---------------------------------------------------------------------------
 
 
-def get_llm() -> Optional[OpenAICompatibleLLM]:
-    """Resolve the configured real LLM provider.
+def get_llm() -> Optional[BaseLLM]:
+    """Resolve the configured real LLM provider (Groq Cloud or OpenAI Compatible).
 
     FakeLLM is NEVER returned here. Tests inject it via dependency_overrides.
 
     Returns:
-        A cached OpenAICompatibleLLM when the provider is configured,
-        or None when no real provider is configured (endpoint returns
-        501 in that case).
+        A cached BaseLLM (GroqLLM or OpenAICompatibleLLM) when the provider is configured,
+        or None when no real provider is configured (endpoint returns 501 in that case).
     """
+    if settings.llm_provider == "groq":
+        from app.llm.groq_llm import GroqLLM, is_groq_configured  # noqa: PLC0415
+        api_key = settings.groq_api_key or settings.llm_api_key
+        if not is_groq_configured(api_key):
+            return None
+        key: tuple[object, ...] = (
+            "groq",
+            api_key,
+            settings.groq_base_url,
+            settings.groq_model or settings.llm_model,
+            settings.llm_timeout_seconds,
+        )
+        with _llm_cache_lock:
+            if key not in _llm_cache:
+                _llm_cache[key] = GroqLLM(
+                    api_key=api_key,
+                    base_url=settings.groq_base_url,
+                    model_name=settings.groq_model or settings.llm_model,
+                    timeout_seconds=settings.llm_timeout_seconds,
+                )
+            return _llm_cache[key]
+
     if settings.llm_provider != "openai_compatible":
         return None
 
@@ -99,7 +121,8 @@ def get_llm() -> Optional[OpenAICompatibleLLM]:
     ):
         return None
 
-    key: tuple[object, ...] = (
+    key = (
+        "openai_compatible",
         settings.llm_api_key,
         base_url,
         settings.llm_model or DEFAULT_MODEL_NAME,

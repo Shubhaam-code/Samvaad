@@ -50,22 +50,30 @@ class Settings(BaseSettings):
     app_name: str = "rag-backend"
     cors_allowed_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
-    # LLM provider configuration (Phase 6.4)
-    llm_provider: str = "openai_compatible"
+    # LLM provider configuration ("groq", "openai_compatible", "fake")
+    llm_provider: str = "groq"
     llm_api_key: Optional[str] = Field(
         None,
-        description="OpenAI-compatible provider API key (from environment only)",
+        description="LLM provider API key (from environment only)",
     )
     llm_base_url: Optional[str] = Field(
         None,
-        description="OpenAI-compatible base URL (None = default OpenAI endpoint)",
+        description="LLM base URL (None = provider default)",
     )
-    llm_model: str = "gpt-4o-mini"
+    llm_model: str = "llama-3.1-8b-instant"
     llm_timeout_seconds: float = Field(
         60.0,
         gt=0.0,
         description="Provider call timeout in seconds",
     )
+
+    # Groq Cloud Specific Configuration
+    groq_api_key: Optional[str] = Field(
+        None,
+        description="Groq Cloud API key (from environment only)",
+    )
+    groq_model: str = "llama-3.1-8b-instant"
+    groq_base_url: str = "https://api.groq.com/openai/v1"
 
     # STT provider configuration ("sarvam", "openai_whisper", "fake")
     stt_provider: str = "sarvam"

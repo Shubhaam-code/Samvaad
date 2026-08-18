@@ -52,6 +52,13 @@ from .openai_tts import (
     create_openai_tts,
     is_openai_tts_configured,
 )
+from .sarvam_tts import (
+    DEFAULT_SARVAM_SPEAKER,
+    DEFAULT_SARVAM_TTS_ENDPOINT,
+    DEFAULT_SARVAM_TTS_MODEL,
+    SarvamTTS,
+    is_sarvam_tts_configured,
+)
 from .types import (
     TTSAudio,
     TTSFormat,
@@ -106,7 +113,7 @@ __all__ = [
     # Fake provider (tests ONLY — never used in production)
     "FakeTTS",
     "create_fake_tts",
-    # OpenAI TTS provider (production)
+    # OpenAI TTS provider
     "DEFAULT_BASE_URL",
     "DEFAULT_MODEL_NAME",
     "DEFAULT_VOICE",
@@ -117,4 +124,10 @@ __all__ = [
     "OpenAITTS",
     "create_openai_tts",
     "is_openai_tts_configured",
+    # Sarvam TTS provider
+    "DEFAULT_SARVAM_SPEAKER",
+    "DEFAULT_SARVAM_TTS_ENDPOINT",
+    "DEFAULT_SARVAM_TTS_MODEL",
+    "SarvamTTS",
+    "is_sarvam_tts_configured",
 ]

@@ -43,6 +43,12 @@ from .openai_whisper import (
     create_openai_whisper_stt,
     is_openai_whisper_configured,
 )
+from .sarvam_stt import (
+    DEFAULT_SARVAM_STT_ENDPOINT,
+    DEFAULT_SARVAM_STT_MODEL,
+    SarvamSTT,
+    is_sarvam_stt_configured,
+)
 from .types import STTAudio, STTLanguage, STTText
 from .validation import (
     DEFAULT_MAX_AUDIO_BYTES,
@@ -84,7 +90,7 @@ __all__ = [
     # Fake provider (tests/offline dev only — never used in production)
     "FakeSTT",
     "create_fake_stt",
-    # OpenAI Whisper provider (production)
+    # OpenAI Whisper provider
     "DEFAULT_BASE_URL",
     "DEFAULT_MODEL_NAME",
     "DEFAULT_TIMEOUT_SECONDS",
@@ -92,4 +98,9 @@ __all__ = [
     "OpenAIWhisperSTT",
     "create_openai_whisper_stt",
     "is_openai_whisper_configured",
+    # Sarvam STT provider
+    "DEFAULT_SARVAM_STT_ENDPOINT",
+    "DEFAULT_SARVAM_STT_MODEL",
+    "SarvamSTT",
+    "is_sarvam_stt_configured",
 ]

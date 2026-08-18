@@ -67,17 +67,17 @@ class Settings(BaseSettings):
         description="Provider call timeout in seconds",
     )
 
-    # STT provider configuration
-    stt_provider: str = "openai_whisper"
+    # STT provider configuration ("sarvam", "openai_whisper", "fake")
+    stt_provider: str = "sarvam"
     stt_api_key: Optional[str] = Field(
         None,
         description="STT provider API key (from environment only)",
     )
     stt_base_url: Optional[str] = Field(
         None,
-        description="STT base URL (None = default OpenAI endpoint)",
+        description="STT base URL (None = default provider endpoint)",
     )
-    stt_model: str = "whisper-1"
+    stt_model: str = "saaras:v2"
     stt_language: Optional[str] = Field(
         None,
         description="Default STT language hint (None = automatic detection)",
@@ -93,19 +93,19 @@ class Settings(BaseSettings):
         description="Maximum accepted audio upload size in MB",
     )
 
-    # TTS provider configuration
-    tts_provider: str = "openai_tts"
+    # TTS provider configuration ("sarvam", "openai_tts", "fake")
+    tts_provider: str = "sarvam"
     tts_api_key: Optional[str] = Field(
         None,
         description="TTS provider API key (from environment only)",
     )
     tts_base_url: Optional[str] = Field(
         None,
-        description="TTS base URL (None = default OpenAI endpoint)",
+        description="TTS base URL (None = default provider endpoint)",
     )
-    tts_model: str = "tts-1"
-    tts_voice: str = "alloy"
-    tts_output_format: str = "mp3"
+    tts_model: str = "bulbul:v2"
+    tts_voice: str = "meera"
+    tts_output_format: str = "wav"
     tts_speed: float = Field(
         1.0,
         ge=0.25,
@@ -126,6 +126,27 @@ class Settings(BaseSettings):
         10.0,
         gt=0.0,
         description="Maximum accepted audio response size in MB",
+    )
+
+    # Sarvam AI Specific Configuration
+    sarvam_api_key: Optional[str] = Field(
+        None,
+        description="Sarvam AI Subscription Key (from environment only)",
+    )
+    sarvam_stt_model: str = "saaras:v2"
+    sarvam_tts_model: str = "bulbul:v2"
+    sarvam_speaker: str = "meera"
+    sarvam_tts_pace: float = Field(
+        1.0,
+        ge=0.5,
+        le=2.0,
+        description="Sarvam TTS pace multiplier",
+    )
+    sarvam_tts_loudness: float = Field(
+        1.0,
+        ge=0.5,
+        le=3.0,
+        description="Sarvam TTS loudness multiplier",
     )
 
     # RAG index configuration (Phase 5.3)

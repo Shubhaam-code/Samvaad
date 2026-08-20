@@ -1,0 +1,8 @@
+# Production runtime dependencies for container deployment.
+-r requirements.txt
+
+numpy>=1.26.0
+faiss-cpu>=1.8.0
+torch>=2.2.0
+sentencepiece>=0.2.0
+safetensors>=0.4.0

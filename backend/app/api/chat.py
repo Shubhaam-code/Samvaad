@@ -155,9 +155,11 @@ def chat(
 
     record_success(
         {
-            "guardrail_ms": guardrail_ms,
+            "stt_ms": 0.0,
             "retrieval_ms": retrieval_ms,
             "llm_ms": llm_ms,
+            "tts_ms": 0.0,
+            "guardrail_ms": guardrail_ms,
             "grounding_ms": grounding_ms,
             "total_ms": total_ms,
         }

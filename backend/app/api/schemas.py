@@ -102,6 +102,9 @@ class LatencyStats(BaseModel):
         mean_ms: Mean stage latency (sum / count; 0.0 when count is 0)
         min_ms: Minimum stage latency in milliseconds
         max_ms: Maximum stage latency in milliseconds
+        p50_ms: Median stage latency in milliseconds
+        p70_ms: 70th percentile stage latency in milliseconds
+        p100_ms: Maximum observed stage latency in milliseconds
     """
 
     request_count: int = Field(0, ge=0, description="Successful requests contributing to this stage")
@@ -109,6 +112,9 @@ class LatencyStats(BaseModel):
     mean_ms: float = Field(0.0, ge=0.0, description="Mean stage latency (ms)")
     min_ms: float = Field(0.0, ge=0.0, description="Minimum stage latency (ms)")
     max_ms: float = Field(0.0, ge=0.0, description="Maximum stage latency (ms)")
+    p50_ms: float = Field(0.0, ge=0.0, description="Median stage latency (ms)")
+    p70_ms: float = Field(0.0, ge=0.0, description="70th percentile stage latency (ms)")
+    p100_ms: float = Field(0.0, ge=0.0, description="Maximum observed stage latency (ms)")
 
 
 class AnalyticsResponse(BaseModel):
@@ -122,9 +128,12 @@ class AnalyticsResponse(BaseModel):
         request_count: Successful pipeline completions recorded
         rejected_count: Guardrail rejections (400 QUERY_REJECTED)
         error_count: Other non-successful outcomes (501/503/500)
-        guardrail_ms: Aggregates for the input guardrail stage
+        sub_200ms_achieved: True when total P50 latency is below 200 ms
+        stt_ms: Aggregates for the STT transcription stage
         retrieval_ms: Aggregates for the retrieval stage
         llm_ms: Aggregates for the LLM generation stage
+        tts_ms: Aggregates for the TTS synthesis stage
+        guardrail_ms: Aggregates for the input guardrail stage
         grounding_ms: Aggregates for the grounding verification stage
         total_ms: Aggregates for the total pipeline
     """
@@ -132,9 +141,15 @@ class AnalyticsResponse(BaseModel):
     request_count: int = Field(0, ge=0, description="Successful pipeline completions recorded")
     rejected_count: int = Field(0, ge=0, description="Guardrail rejections (400 QUERY_REJECTED)")
     error_count: int = Field(0, ge=0, description="Other non-successful outcomes (501/503/500)")
-    guardrail_ms: LatencyStats = Field(default_factory=LatencyStats, description="Input guardrail stage")
+    sub_200ms_achieved: bool = Field(
+        False,
+        description="True when total P50 latency is below the 200 ms interactive SLA",
+    )
+    stt_ms: LatencyStats = Field(default_factory=LatencyStats, description="STT transcription stage")
     retrieval_ms: LatencyStats = Field(default_factory=LatencyStats, description="Retrieval stage")
     llm_ms: LatencyStats = Field(default_factory=LatencyStats, description="LLM generation stage")
+    tts_ms: LatencyStats = Field(default_factory=LatencyStats, description="TTS synthesis stage")
+    guardrail_ms: LatencyStats = Field(default_factory=LatencyStats, description="Input guardrail stage")
     grounding_ms: LatencyStats = Field(default_factory=LatencyStats, description="Grounding verification stage")
     total_ms: LatencyStats = Field(default_factory=LatencyStats, description="Total pipeline")
 

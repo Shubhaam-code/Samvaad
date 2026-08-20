@@ -44,6 +44,7 @@ from app.api.dependencies import (
     get_stt,
     get_tts,
 )
+from app.analytics import record_error, record_rejected, record_success
 from app.api.schemas import Citation, VoiceLatencyBreakdown, VoiceQueryResponse
 from app.guardrails.grounding_verifier import GroundingVerifier
 from app.guardrails.models import GuardrailVerdict
@@ -116,6 +117,7 @@ async def voice_query(
 
     # Stage 1: STT Provider Check
     if stt is None:
+        record_error()
         raise HTTPException(
             status_code=501,
             detail={
@@ -142,6 +144,7 @@ async def voice_query(
     guardrail_ms = _ms(t_stage)
 
     if guardrail_result.verdict == GuardrailVerdict.OFF_TOPIC_REJECTED:
+        record_rejected()
         raise HTTPException(
             status_code=400,
             detail={
@@ -159,6 +162,7 @@ async def voice_query(
 
     # Stage 4: LLM Provider Check
     if llm is None:
+        record_error()
         raise HTTPException(
             status_code=501,
             detail={
@@ -169,6 +173,7 @@ async def voice_query(
 
     # Stage 5: Vector Index Check
     if orchestrator is None:
+        record_error()
         raise HTTPException(
             status_code=503,
             detail={
@@ -233,6 +238,7 @@ async def voice_query(
 
     # Stage 9: TTS Provider Check
     if tts is None:
+        record_error()
         raise HTTPException(
             status_code=501,
             detail={
@@ -255,6 +261,18 @@ async def voice_query(
 
     audio_base64 = base64.b64encode(tts_response.audio).decode("ascii")
     total_ms = _ms(t_total)
+
+    record_success(
+        {
+            "stt_ms": stt_ms,
+            "retrieval_ms": retrieval_ms,
+            "llm_ms": llm_ms,
+            "tts_ms": tts_ms,
+            "guardrail_ms": guardrail_ms,
+            "grounding_ms": grounding_ms,
+            "total_ms": total_ms,
+        }
+    )
 
     return VoiceQueryResponse(
         transcribed_text=transcribed_text,

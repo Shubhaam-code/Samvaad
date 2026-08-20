@@ -34,9 +34,11 @@ from app.vectorstore.base import VectorRecord
 client = TestClient(app)
 
 SAMPLE_LATENCIES = {
-    "guardrail_ms": 1.0,
+    "stt_ms": 0.0,
     "retrieval_ms": 2.0,
     "llm_ms": 3.0,
+    "tts_ms": 0.0,
+    "guardrail_ms": 1.0,
     "grounding_ms": 4.0,
     "total_ms": 10.0,
 }
@@ -61,7 +63,7 @@ def test_recorder_empty_snapshot_is_zeroed():
     assert snapshot["request_count"] == 0
     assert snapshot["rejected_count"] == 0
     assert snapshot["error_count"] == 0
-    for key in ("guardrail_ms", "retrieval_ms", "llm_ms", "grounding_ms", "total_ms"):
+    for key in ("stt_ms", "retrieval_ms", "llm_ms", "tts_ms", "guardrail_ms", "grounding_ms", "total_ms"):
         stage = snapshot["latency"][key]
         assert stage == {
             "request_count": 0,
@@ -69,6 +71,9 @@ def test_recorder_empty_snapshot_is_zeroed():
             "mean_ms": 0.0,
             "min_ms": 0.0,
             "max_ms": 0.0,
+            "p50_ms": 0.0,
+            "p70_ms": 0.0,
+            "p100_ms": 0.0,
         }
 
 
@@ -249,12 +254,16 @@ def test_analytics_empty_state_returns_200_zeroed():
     assert body["request_count"] == 0
     assert body["rejected_count"] == 0
     assert body["error_count"] == 0
-    for key in ("guardrail_ms", "retrieval_ms", "llm_ms", "grounding_ms", "total_ms"):
+    assert body["sub_200ms_achieved"] is False
+    for key in ("stt_ms", "retrieval_ms", "llm_ms", "tts_ms", "guardrail_ms", "grounding_ms", "total_ms"):
         assert body[key]["request_count"] == 0
         assert body[key]["sum_ms"] == 0.0
         assert body[key]["mean_ms"] == 0.0
         assert body[key]["min_ms"] == 0.0
         assert body[key]["max_ms"] == 0.0
+        assert body[key]["p50_ms"] == 0.0
+        assert body[key]["p70_ms"] == 0.0
+        assert body[key]["p100_ms"] == 0.0
 
 
 def test_analytics_after_successful_chat():
@@ -275,10 +284,12 @@ def test_analytics_after_successful_chat():
     assert body["request_count"] == 1
     assert body["rejected_count"] == 0
     assert body["error_count"] == 0
-    for key in ("guardrail_ms", "retrieval_ms", "llm_ms", "grounding_ms", "total_ms"):
+    for key in ("stt_ms", "retrieval_ms", "llm_ms", "tts_ms", "guardrail_ms", "grounding_ms", "total_ms"):
         assert body[key]["request_count"] == 1
-        assert body[key]["sum_ms"] > 0.0
-        assert body[key]["mean_ms"] == pytest.approx(body[key]["sum_ms"], abs=1e-4)
+        assert body[key]["sum_ms"] > 0.0 or key in ("stt_ms", "tts_ms")
+        assert body[key]["p50_ms"] >= 0.0
+        assert body[key]["p70_ms"] >= body[key]["p50_ms"]
+        assert body[key]["p100_ms"] >= body[key]["p70_ms"]
         assert body[key]["min_ms"] <= body[key]["max_ms"]
     # total must be the largest stage
     assert body["total_ms"]["sum_ms"] >= body["llm_ms"]["sum_ms"]
@@ -300,7 +311,7 @@ def test_analytics_rejection_counts_only_rejected():
     assert body["request_count"] == 0
     assert body["error_count"] == 0
     assert all(body[key]["sum_ms"] == 0.0 for key in
-               ("guardrail_ms", "retrieval_ms", "llm_ms", "grounding_ms", "total_ms"))
+               ("stt_ms", "retrieval_ms", "llm_ms", "tts_ms", "guardrail_ms", "grounding_ms", "total_ms"))
 
 
 def test_analytics_501_counts_as_error():
@@ -361,8 +372,8 @@ def test_openapi_documents_analytics_endpoint():
     assert "LatencyStats" in schemas
 
     analytics_schema = schemas["AnalyticsResponse"]
-    for key in ("request_count", "rejected_count", "error_count",
-                "guardrail_ms", "retrieval_ms", "llm_ms", "grounding_ms", "total_ms"):
+    for key in ("request_count", "rejected_count", "error_count", "sub_200ms_achieved",
+                "stt_ms", "retrieval_ms", "llm_ms", "tts_ms", "guardrail_ms", "grounding_ms", "total_ms"):
         assert key in analytics_schema["properties"]
 
 

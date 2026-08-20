@@ -1379,3 +1379,235 @@ p {
     flex-direction: column;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Latency Dashboard (Phase 5.10)                                     */
+/* ------------------------------------------------------------------ */
+
+.latency-dashboard {
+  backdrop-filter: blur(18px);
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  bottom: 18px;
+  box-shadow: var(--shadow);
+  left: 50%;
+  max-width: 960px;
+  position: fixed;
+  transform: translateX(-50%);
+  width: calc(100% - 36px);
+  z-index: 60;
+}
+
+.dark .latency-dashboard {
+  background: rgba(22, 27, 37, 0.94);
+}
+
+.latency-dashboard.collapsed {
+  width: min(420px, calc(100% - 36px));
+}
+
+.latency-dashboard-header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 14px 16px;
+}
+
+.latency-dashboard-title {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.latency-dashboard-title strong {
+  display: block;
+  font-size: 14px;
+}
+
+.latency-dashboard-title p {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+}
+
+.latency-dashboard-title .pulse-dot {
+  color: var(--orange);
+  font-size: 22px;
+}
+
+.latency-dashboard.status-offline .pulse-dot {
+  color: #94a3b8;
+}
+
+.latency-dashboard-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.sla-badge {
+  align-items: center;
+  background: rgba(148, 163, 184, 0.14);
+  border-radius: 999px;
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 11px;
+  font-weight: 700;
+  gap: 4px;
+  letter-spacing: 0.02em;
+  padding: 6px 10px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.sla-badge .material-icons {
+  font-size: 16px;
+}
+
+.sla-badge.achieved {
+  background: rgba(16, 185, 129, 0.16);
+  color: #059669;
+}
+
+.dark .sla-badge.achieved {
+  color: #34d399;
+}
+
+.latency-toggle {
+  align-items: center;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink);
+  cursor: pointer;
+  display: inline-flex;
+  height: 34px;
+  justify-content: center;
+  width: 34px;
+}
+
+.latency-dashboard-body {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 14px;
+  padding: 14px 16px 16px;
+}
+
+.latency-percentiles {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.latency-percentile-card {
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.latency-percentile-card span {
+  color: var(--muted);
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.latency-percentile-card strong {
+  display: block;
+  font-size: 18px;
+  margin-top: 4px;
+}
+
+.latency-stage-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.latency-gauge {
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 10px 12px;
+}
+
+.latency-gauge-head {
+  align-items: center;
+  display: flex;
+  font-size: 12px;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.latency-gauge-head .material-icons {
+  color: var(--orange);
+  font-size: 16px;
+}
+
+.latency-gauge-head strong {
+  margin-left: auto;
+}
+
+.latency-gauge-track {
+  background: rgba(148, 163, 184, 0.18);
+  border-radius: 999px;
+  height: 8px;
+  overflow: hidden;
+  position: relative;
+}
+
+.latency-gauge-fill {
+  background: linear-gradient(90deg, #10b981, #34d399);
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+  transition: width 0.35s ease;
+}
+
+.latency-gauge.tone-warn .latency-gauge-fill {
+  background: linear-gradient(90deg, #f59e0b, #fbbf24);
+}
+
+.latency-gauge.tone-hot .latency-gauge-fill {
+  background: linear-gradient(90deg, #ef4444, #f97316);
+}
+
+.latency-gauge.tone-idle .latency-gauge-fill {
+  background: rgba(148, 163, 184, 0.35);
+}
+
+.latency-gauge-meta {
+  color: var(--muted);
+  display: flex;
+  font-size: 10px;
+  justify-content: space-between;
+  margin-top: 6px;
+}
+
+@media (max-width: 900px) {
+  .latency-percentiles,
+  .latency-stage-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .latency-dashboard {
+    bottom: 12px;
+    width: calc(100% - 24px);
+  }
+
+  .latency-percentiles,
+  .latency-stage-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .sla-badge span:not(.material-icons) {
+    display: none;
+  }
+}

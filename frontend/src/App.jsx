@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import ChatFeed from './components/ChatFeed.jsx'
+import LatencyDashboard from './components/LatencyDashboard.jsx'
 import VoiceRecorder from './components/VoiceRecorder.jsx'
 
 const navItems = ['Platform', 'How it Works', 'Use Cases', 'Technology']
@@ -82,6 +83,7 @@ function App() {
   const [messages, setMessages] = useState(firstMessages)
   const [activeCitationId, setActiveCitationId] = useState(1)
   const [theme, setTheme] = useState('light')
+  const [latencyTick, setLatencyTick] = useState(0)
 
   const activeCitation = useMemo(
     () => citations.find((citation) => citation.id === activeCitationId) || citations[0],
@@ -108,6 +110,7 @@ function App() {
       },
     ])
     setActiveCitationId(1)
+    setLatencyTick(Date.now())
   }
 
   const playAnswer = (text) => {
@@ -358,6 +361,8 @@ function App() {
           </div>
         </div>
       </footer>
+
+      <LatencyDashboard liveSample={latencyTick} />
     </div>
   )
 }

@@ -35,7 +35,6 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
-from app.api.chat import SYSTEM_PROMPT
 from app.api.dependencies import (
     get_grounding_verifier,
     get_guardrail_pipeline,
@@ -47,11 +46,17 @@ from app.api.dependencies import (
 from app.analytics import record_error, record_rejected, record_success
 from app.api.schemas import Citation, VoiceLatencyBreakdown, VoiceQueryResponse
 from app.guardrails.grounding_verifier import GroundingVerifier
-from app.guardrails.models import GuardrailVerdict
+from app.guardrails.models import GuardrailResult, GuardrailVerdict
 from app.guardrails.pipeline import GuardrailPipeline
 from app.llm.models import LLMRequest
+from app.llm.prompt_engine import (
+    build_conversational_prompt,
+    build_grounded_rag_prompt,
+    is_conversational,
+)
 from app.retrieval.orchestrator import RetrievalOrchestrator
 from app.settings import settings
+from app.stt.base import NoSpeechDetectedError
 from app.stt.models import STTRequest
 from app.stt.validation import validate_audio
 from app.tts.models import TTSRequest
@@ -134,7 +139,19 @@ async def voice_query(
         content_type=validated_audio.content_type,
         language=language,
     )
-    stt_response = stt.transcribe(stt_req)  # type: ignore[union-attr]
+    try:
+        stt_response = stt.transcribe(stt_req)  # type: ignore[union-attr]
+    except NoSpeechDetectedError as exc:
+        # Valid upload, but silence / unintelligible audio. Client-side
+        # condition, so 400 with a message the UI can show verbatim.
+        record_rejected()
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "NO_SPEECH_DETECTED",
+                "message": str(exc),
+            },
+        ) from exc
     stt_ms = _ms(t_stage)
     transcribed_text = stt_response.text
 
@@ -182,59 +199,93 @@ async def voice_query(
             },
         )
 
-    # Stage 6: Retrieval
-    retrieval_result = orchestrator.retrieve(transcribed_text)
-    retrieval_ms = round(
-        retrieval_result.latencies_ms.get("embedding_ms", 0.0)
-        + retrieval_result.latencies_ms.get("search_ms", 0.0)
-        + retrieval_result.latencies_ms.get("resolution_ms", 0.0),
-        _MS_ROUND,
-    )
+    # Greetings / small talk carry no factual claim, so they bypass retrieval and
+    # grounding. We still synthesize speech so the user hears a spoken reply.
+    conversational = is_conversational(transcribed_text)
 
-    citations = [
-        Citation(
-            chunk_id=item.chunk_id,
-            document_id=item.chunk.document_id,
-            score=item.score,
-            text=item.chunk.chunk_text,
+    if conversational:
+        retrieval_ms = 0.0
+        citations = []
+        grounding_ms = 0.0
+        grounding_result = GuardrailResult(
+            verdict=GuardrailVerdict.SAFE_AND_GROUNDED,
+            reason="Conversational turn; no factual claim to verify.",
+            score=1.0,
+            flagged_claims=[],
         )
-        for item in retrieval_result.retrieved_chunks
-    ]
 
-    # Stage 7: LLM Generation
-    t_stage = time.perf_counter()
-    llm_response = llm.generate(LLMRequest(prompt=transcribed_text, system_prompt=SYSTEM_PROMPT))  # type: ignore[union-attr]
-    llm_ms = _ms(t_stage)
-    answer_text = llm_response.text
+        t_stage = time.perf_counter()
+        sys_prompt, user_prompt = build_conversational_prompt(transcribed_text)
+        llm_response = llm.generate(  # type: ignore[union-attr]
+            LLMRequest(prompt=user_prompt, system_prompt=sys_prompt)
+        )
+        llm_ms = _ms(t_stage)
+        answer_text = llm_response.text
+    else:
+        # Stage 6: Retrieval
+        retrieval_result = orchestrator.retrieve(transcribed_text)
+        retrieval_ms = round(
+            retrieval_result.latencies_ms.get("embedding_ms", 0.0)
+            + retrieval_result.latencies_ms.get("search_ms", 0.0)
+            + retrieval_result.latencies_ms.get("resolution_ms", 0.0),
+            _MS_ROUND,
+        )
 
-    # Stage 8: Post-generation Grounding Verification
-    t_stage = time.perf_counter()
-    evidence_chunks = [item.chunk for item in retrieval_result.retrieved_chunks]
-    grounding_result = grounding_verifier.verify(answer_text, evidence_chunks)
-    grounding_ms = _ms(t_stage)
+        citations = [
+            Citation(
+                chunk_id=item.chunk_id,
+                document_id=item.chunk.document_id,
+                score=item.score,
+                text=item.chunk.chunk_text,
+            )
+            for item in retrieval_result.retrieved_chunks
+        ]
 
-    if grounding_result.verdict == GuardrailVerdict.UNGROUNDED_FLAGGED:
-        total_ms = _ms(t_total)
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "code": "UNGROUNDED_ANSWER",
-                "transcribed_text": transcribed_text,
-                "answer": answer_text,
-                "verdict": grounding_result.verdict.value,
-                "reason": grounding_result.reason,
-                "flagged_claims": grounding_result.flagged_claims,
-                "citations": [c.model_dump() for c in citations],
-                "latency_ms": {
-                    "stt_ms": stt_ms,
-                    "guardrail_ms": guardrail_ms,
-                    "retrieval_ms": retrieval_ms,
-                    "llm_ms": llm_ms,
-                    "grounding_ms": grounding_ms,
-                    "total_ms": total_ms,
+        # Stage 7: LLM Generation (grounded in the retrieved evidence)
+        t_stage = time.perf_counter()
+        sys_prompt, user_prompt = build_grounded_rag_prompt(
+            query=transcribed_text,
+            retrieved_chunks=retrieval_result.retrieved_chunks,
+        )
+        llm_response = llm.generate(  # type: ignore[union-attr]
+            LLMRequest(prompt=user_prompt, system_prompt=sys_prompt)
+        )
+        llm_ms = _ms(t_stage)
+        answer_text = llm_response.text
+
+        # Stage 8: Post-generation Grounding Verification
+        t_stage = time.perf_counter()
+        evidence_chunks = [item.chunk for item in retrieval_result.retrieved_chunks]
+        grounding_result = grounding_verifier.verify(
+            answer_text, evidence_chunks, query=transcribed_text
+        )
+        grounding_ms = _ms(t_stage)
+
+        # Refuse to speak an ungrounded answer. TTS is never invoked, so a
+        # fabricated claim is never voiced back to the user.
+        if grounding_result.verdict is GuardrailVerdict.UNGROUNDED_FLAGGED:
+            total_ms = _ms(t_total)
+            record_rejected()
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "UNGROUNDED_ANSWER",
+                    "transcribed_text": transcribed_text,
+                    "answer": answer_text,
+                    "verdict": grounding_result.verdict.value,
+                    "reason": grounding_result.reason,
+                    "flagged_claims": list(grounding_result.flagged_claims),
+                    "citations": [c.model_dump() for c in citations],
+                    "latency_ms": {
+                        "stt_ms": stt_ms,
+                        "guardrail_ms": guardrail_ms,
+                        "retrieval_ms": retrieval_ms,
+                        "llm_ms": llm_ms,
+                        "grounding_ms": grounding_ms,
+                        "total_ms": total_ms,
+                    },
                 },
-            },
-        )
+            )
 
     # Stage 9: TTS Provider Check
     if tts is None:
@@ -297,6 +348,61 @@ async def voice_query(
             total_ms=total_ms,
         ),
     )
+
+
+from pydantic import BaseModel, Field
+
+
+class TTSRequestBody(BaseModel):
+    text: str = Field(..., min_length=1, max_length=2000, description="Text to synthesize")
+    language: Optional[str] = Field("hi-IN", description="Language code (e.g. 'hi-IN', 'en-IN')")
+    voice: Optional[str] = Field("anushka", description="Voice speaker name")
+    speed: Optional[float] = Field(1.0, ge=0.5, le=2.0, description="Speech speed")
+
+
+@router.post("/tts")
+async def text_to_speech(
+    body: TTSRequestBody,
+    tts: object = Depends(get_tts),
+) -> dict:
+    """Synthesize text into speech using the configured TTS engine (Sarvam AI)."""
+    if tts is None:
+        raise HTTPException(
+            status_code=501,
+            detail={"code": "TTS_NOT_CONFIGURED", "message": "TTS provider not configured"},
+        )
+
+    t_start = time.perf_counter()
+    tts_response = tts.synthesize(
+        TTSRequest(
+            text=body.text,
+            language=body.language,
+            voice=body.voice,
+            speed=body.speed,
+        )
+    )
+    tts_ms = _ms(t_start)
+
+    # record_success() requires every STAGE_KEYS entry. This endpoint only
+    # exercises synthesis, so the stages it never runs are reported as 0.0
+    # rather than omitted (a partial dict raises ValueError -> HTTP 500).
+    record_success(
+        {
+            "stt_ms": 0.0,
+            "retrieval_ms": 0.0,
+            "llm_ms": 0.0,
+            "tts_ms": tts_ms,
+            "guardrail_ms": 0.0,
+            "grounding_ms": 0.0,
+            "total_ms": tts_ms,
+        }
+    )
+
+    return {
+        "audio_base64": base64.b64encode(tts_response.audio).decode("ascii"),
+        "latency_ms": tts_ms,
+        "format": tts_response.format,
+    }
 
 
 __all__ = [

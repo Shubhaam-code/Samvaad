@@ -89,6 +89,14 @@ def get_llm() -> Optional[BaseLLM]:
         A cached BaseLLM (GroqLLM or OpenAICompatibleLLM) when the provider is configured,
         or None when no real provider is configured (endpoint returns 501 in that case).
     """
+    if settings.llm_provider == "fake":
+        from app.llm.fake import FakeLLM  # noqa: PLC0415
+        key = ("fake",)
+        with _llm_cache_lock:
+            if key not in _llm_cache:
+                _llm_cache[key] = FakeLLM()
+            return _llm_cache[key]
+
     if settings.llm_provider == "groq":
         from app.llm.groq_llm import GroqLLM, is_groq_configured  # noqa: PLC0415
         api_key = settings.groq_api_key or settings.llm_api_key
@@ -134,19 +142,13 @@ def get_llm() -> Optional[BaseLLM]:
         settings.llm_model or DEFAULT_MODEL_NAME,
         settings.llm_timeout_seconds,
     )
-    from app.llm.harness import ModelOrchestrationHarness  # noqa: PLC0415
     with _llm_cache_lock:
         if key not in _llm_cache:
-            raw_llm = OpenAICompatibleLLM(
+            _llm_cache[key] = OpenAICompatibleLLM(
                 api_key=settings.llm_api_key,
                 base_url=base_url,
                 model_name=settings.llm_model or DEFAULT_MODEL_NAME,
                 timeout_seconds=settings.llm_timeout_seconds,
-            )
-            _llm_cache[key] = ModelOrchestrationHarness(
-                provider_llm=raw_llm,
-                max_retries=2,
-                base_backoff_seconds=0.2,
             )
         return _llm_cache[key]
 
@@ -183,7 +185,7 @@ def get_stt() -> Optional[BaseSTT]:
                     api_key=api_key,
                     model=settings.sarvam_stt_model,
                     timeout_seconds=settings.stt_timeout_seconds,
-                    max_audio_size_mb=int(settings.stt_max_audio_size_mb * 1024 * 1024),
+                    max_audio_bytes=int(settings.stt_max_audio_size_mb * 1024 * 1024),
                 )
             return _stt_cache[key]
 
@@ -299,7 +301,7 @@ def get_tts() -> Optional[BaseTTS]:
             _tts_cache[key] = OpenAITTS(
                 api_key=api_key,
                 base_url=base_url_override,
-                model_name=settings.tts_model or "tts-1",
+                model=settings.tts_model or "tts-1",
                 voice=settings.tts_voice or "alloy",
                 output_format=settings.tts_output_format or "mp3",
                 speed=settings.tts_speed,
@@ -313,6 +315,81 @@ def get_tts() -> Optional[BaseTTS]:
 # ---------------------------------------------------------------------------
 # Other dependencies
 # ---------------------------------------------------------------------------
+
+
+def _build_resolver_from_records(records: list) -> "DictChunkResolver":
+    """Rebuild a chunk resolver from a bare vector store's metadata sidecar.
+
+    Used for indexes produced by ``scripts/build_full_index.py``, which
+    persist a vector store plus a ``metadata.json`` sidecar but no separate
+    ``chunks.jsonl`` corpus or manifest.
+
+    The chunk_id is taken VERBATIM from the index record and is never
+    re-derived. ``Chunk.from_passage_segment()`` computes chunk_id as a hash
+    of (document_id, strategy, chunk_index), so rebuilding chunks through
+    that factory produces IDs that do not match the persisted index whenever
+    the strategy differs from the one used at build time (the production
+    index uses ``adaptive``). Because
+    ``RetrievalOrchestrator.retrieve()`` re-keys resolved chunks by
+    ``chunk.chunk_id`` to pair them back with search hits, any mismatch
+    silently routes every hit into ``missing_chunk_ids`` and yields zero
+    evidence and zero citations.
+
+    Args:
+        records: VectorRecord metadata entries, in index order
+
+    Returns:
+        A DictChunkResolver keyed by the persisted chunk_id
+    """
+    from app.chunking.models import Chunk, ChunkingStrategy  # noqa: PLC0415
+    from app.retrieval import DictChunkResolver  # noqa: PLC0415
+
+    chunks: dict[str, Chunk] = {}
+    for record in records:
+        meta = record.extra_metadata or {}
+
+        text = (meta.get("chunk_text") or "").strip()
+        if not text:
+            # chunk_text is mandatory (min_length=1); skip unusable records
+            # rather than fabricating placeholder evidence the LLM could cite.
+            logger.warning(
+                "Skipping chunk '%s': metadata sidecar carries no chunk_text",
+                record.chunk_id,
+            )
+            continue
+
+        try:
+            strategy = ChunkingStrategy(meta.get("strategy", "passage"))
+        except ValueError:
+            strategy = ChunkingStrategy.PASSAGE
+
+        # query / eng_query are min_length=1; fall back only when absent.
+        query = (meta.get("query") or "").strip() or "indexed passage"
+        eng_query = (meta.get("eng_query") or "").strip() or query
+
+        chunks[record.chunk_id] = Chunk(
+            chunk_id=record.chunk_id,
+            document_id=record.document_id,
+            chunk_index=record.chunk_index,
+            strategy=strategy,
+            chunk_text=text,
+            character_count=meta.get("character_count"),
+            token_count=meta.get("token_count"),
+            start_offset=meta.get("start_offset"),
+            end_offset=meta.get("end_offset"),
+            query_id=record.query_id if record.query_id is not None else 0,
+            passage_index=record.passage_index if record.passage_index is not None else 0,
+            target_lang=record.target_lang or "hi",
+            source_lang=record.source_lang or "en",
+            query=query,
+            eng_query=eng_query,
+            query_type=meta.get("query_type"),
+            answer=meta.get("answer"),
+            eng_answer=meta.get("eng_answer"),
+            is_selected=bool(record.is_selected),
+        )
+
+    return DictChunkResolver(chunks)
 
 
 def get_orchestrator() -> Optional[RetrievalOrchestrator]:
@@ -334,7 +411,15 @@ def get_orchestrator() -> Optional[RetrievalOrchestrator]:
             corrupt - a clear error instead of bad retrieval results.
     """
     index_dir = resolve_index_dir(settings.rag_index_dir)
-    if index_dir is None or not index_exists(index_dir):
+    if index_dir is None:
+        return None
+
+    # Check both index structures: full manifest-based or direct Faiss/Numpy store
+    has_full_index = index_exists(index_dir)
+    has_direct_faiss = (index_dir / "index.faiss").is_file() and (index_dir / "metadata.json").is_file()
+    has_direct_numpy = (index_dir / "vectors.npy").is_file() and (index_dir / "metadata.json").is_file()
+
+    if not (has_full_index or has_direct_faiss or has_direct_numpy):
         return None
 
     key: tuple[object, ...] = (
@@ -343,36 +428,64 @@ def get_orchestrator() -> Optional[RetrievalOrchestrator]:
         settings.rag_embedding_device,
         settings.rag_vector_store,
         settings.rag_top_k,
+        settings.llm_provider,
     )
     with _orchestrator_cache_lock:
         cached = _orchestrator_cache.get(key)
         if cached is not None:
             return cached
 
-        vector_store, resolver, manifest = load_index(
-            index_dir,
-            expected_model_name=settings.rag_embedding_model,
-            expected_backend=settings.rag_vector_store,
-        )
-        embedder = HuggingFaceEmbedder(
-            model_name=settings.rag_embedding_model,
-            device=settings.rag_embedding_device,
-            local_files_only=True,
-        )
+        from app.retrieval.reranker import FastReranker  # noqa: PLC0415
+
+        if has_full_index:
+            vector_store, resolver, manifest = load_index(
+                index_dir,
+                expected_model_name=settings.rag_embedding_model,
+                expected_backend=settings.rag_vector_store,
+            )
+        else:
+            if has_direct_faiss:
+                from app.vectorstore.faiss_store import FaissVectorStore  # noqa: PLC0415
+
+                vector_store = FaissVectorStore.load(index_dir)
+            else:
+                from app.vectorstore.numpy_store import NumpyVectorStore  # noqa: PLC0415
+
+                vector_store = NumpyVectorStore.load(index_dir)
+
+            resolver = _build_resolver_from_records(vector_store.records)
+            if resolver.count == 0:
+                logger.error(
+                    "Index at '%s' resolved 0 chunks; retrieval would return no "
+                    "evidence. Rebuild it with scripts/build_full_index.py.",
+                    index_dir,
+                )
+                return None
+
+        if settings.llm_provider == "fake":
+            from app.embedding.fake import FakeEmbedder  # noqa: PLC0415
+            embedder = FakeEmbedder(dimension=vector_store.dimension or 384)
+        else:
+            from app.embedding.huggingface import create_huggingface_embedder  # noqa: PLC0415
+            embedder = create_huggingface_embedder(
+                model_name=settings.rag_embedding_model,
+                device=settings.rag_embedding_device,
+            )
+
+        reranker = FastReranker(max_latency_ms=15.0)
         orchestrator = RetrievalOrchestrator(
             embedder=embedder,
             vector_store=vector_store,
             resolver=resolver,
+            reranker=reranker,
             top_k=settings.rag_top_k,
         )
         _orchestrator_cache[key] = orchestrator
         logger.info(
-            "Wired orchestrator to index '%s' (backend=%s, dimension=%d, "
-            "vectors=%d, top_k=%d)",
+            "Wired orchestrator to index '%s' (vectors=%d, dimension=%d, top_k=%d)",
             index_dir,
-            manifest.vector_store.backend,
-            manifest.embedding.dimension,
             vector_store.count,
+            vector_store.dimension or 384,
             settings.rag_top_k,
         )
         return orchestrator

@@ -513,3 +513,102 @@ def test_guardrail_pipeline_performance_benchmark() -> None:
     )
 
     assert avg_latency_ms < 15.0, f"Average pipeline latency {avg_latency_ms:.4f} ms exceeded 15.0 ms target!"
+
+
+# Refusal handling
+#
+# A refusal asserts nothing about the world, so it must not be flagged as
+# ungrounded. These tests also pin the abuse cases: the refusal path must not
+# become a way to smuggle a fabricated claim past the verifier.
+
+
+def test_grounding_verifier_english_refusal_is_grounded() -> None:
+    """Test that declining to answer is treated as grounded, not flagged."""
+    verifier = GroundingVerifier()
+    context_chunk = make_test_chunk("Mumbai is a large coastal city in Maharashtra.")
+
+    answer = "The provided passages do not contain information about the capital of Goa."
+    result = verifier.verify(answer, [context_chunk], query="What is the capital of Goa?")
+
+    assert result.verdict == GuardrailVerdict.SAFE_AND_GROUNDED
+    assert result.flagged_claims == []
+
+
+def test_grounding_verifier_hindi_refusal_is_grounded() -> None:
+    """Test a Devanagari refusal answering a romanized-topic question."""
+    verifier = GroundingVerifier()
+    context_chunk = make_test_chunk("Mumbai is a large coastal city in Maharashtra.")
+
+    answer = "प्रदान की गई जानकारी में गोवा की राजधानी का उल्लेख नहीं है।"
+    result = verifier.verify(answer, [context_chunk], query="Goa की राजधानी क्या है?")
+
+    assert result.verdict == GuardrailVerdict.SAFE_AND_GROUNDED
+
+
+def test_grounding_verifier_refusal_with_no_evidence_is_grounded() -> None:
+    """Test that refusing when nothing was retrieved is correct, not a failure."""
+    verifier = GroundingVerifier()
+
+    answer = "The provided context does not contain the answer to that question."
+    result = verifier.verify(answer, [], query="What is the capital of Goa?")
+
+    assert result.verdict == GuardrailVerdict.SAFE_AND_GROUNDED
+
+
+def test_grounding_verifier_fabrication_using_refusal_vocabulary_is_flagged() -> None:
+    """Test that refusal wording cannot be used to smuggle a fabricated claim."""
+    verifier = GroundingVerifier()
+    context_chunk = make_test_chunk("Mumbai is a large coastal city in Maharashtra.")
+
+    answer = "The capital of Goa is Panduri, no other information is available."
+    result = verifier.verify(answer, [context_chunk], query="What is the capital of Goa?")
+
+    assert result.verdict == GuardrailVerdict.UNGROUNDED_FLAGGED
+
+
+def test_grounding_verifier_hindi_mixed_refusal_and_fabrication_is_flagged() -> None:
+    """Test that a refusal followed by an unsupported assertion is still flagged."""
+    verifier = GroundingVerifier()
+    context_chunk = make_test_chunk("Mumbai is a large coastal city in Maharashtra.")
+
+    answer = "प्रदान की गई जानकारी में उल्लेख नहीं है, लेकिन गोवा की राजधानी पणजी शहर है।"
+    result = verifier.verify(answer, [context_chunk], query="Goa की राजधानी क्या है?")
+
+    assert result.verdict == GuardrailVerdict.UNGROUNDED_FLAGGED
+
+
+def test_grounding_verifier_refusal_with_fabricated_number_is_flagged() -> None:
+    """Test that a refusal carrying an unsupported figure is still flagged."""
+    verifier = GroundingVerifier()
+    context_chunk = make_test_chunk("Mumbai is a large coastal city in Maharashtra.")
+
+    answer = "The provided context does not mention Goa, which has 4200000 residents."
+    result = verifier.verify(answer, [context_chunk], query="What is the capital of Goa?")
+
+    assert result.verdict == GuardrailVerdict.UNGROUNDED_FLAGGED
+
+
+def test_grounding_verifier_without_query_keeps_legacy_behaviour() -> None:
+    """Test that omitting query preserves the original strict verification path."""
+    verifier = GroundingVerifier()
+    context_chunk = make_test_chunk("Mumbai is a large coastal city in Maharashtra.")
+
+    answer = "The provided passages do not contain information about the capital of Goa."
+    result = verifier.verify(answer, [context_chunk])
+
+    assert result.verdict == GuardrailVerdict.UNGROUNDED_FLAGGED
+
+
+def test_grounding_verifier_danda_does_not_corrupt_hindi_tokens() -> None:
+    """Test that a sentence-final danda no longer depresses Hindi grounding.
+
+    U+0964 sits inside the Indic codepoint range, so a naive word pattern
+    produced tokens like "है।" that matched no evidence token.
+    """
+    verifier = GroundingVerifier()
+    context_chunk = make_test_chunk("नई दिल्ली भारत की राजधानी है।")
+
+    answer = "भारत की राजधानी नई दिल्ली है।"
+    result = verifier.verify(answer, [context_chunk])
+
+    assert result.verdict == GuardrailVerdict.SAFE_AND_GROUNDED

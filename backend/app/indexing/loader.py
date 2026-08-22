@@ -41,12 +41,19 @@ logger = logging.getLogger(__name__)
 
 VECTORSTORE_DIRNAME = "vectorstore"
 
+# app/indexing/loader.py -> app/indexing -> app -> backend
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+
 
 def resolve_index_dir(path: Optional[str | Path]) -> Optional[Path]:
     """Resolve a configured index directory path.
 
-    Empty / None values resolve to None (index not configured). Relative
-    paths are resolved against the current working directory.
+    Empty / None values resolve to None (index not configured).
+
+    Relative paths are resolved against the **backend root** rather than the
+    current working directory. A value like ``RAG_INDEX_DIR=data/index`` must
+    mean the same directory whether the app is launched from ``backend/``,
+    from the repo root, or from ``/`` inside a container.
 
     Args:
         path: Configured index directory
@@ -59,7 +66,11 @@ def resolve_index_dir(path: Optional[str | Path]) -> Optional[Path]:
     value = str(path).strip()
     if not value:
         return None
-    return Path(value).expanduser().resolve()
+
+    candidate = Path(value).expanduser()
+    if not candidate.is_absolute():
+        candidate = BACKEND_ROOT / candidate
+    return candidate.resolve()
 
 
 def index_exists(index_dir: str | Path) -> bool:

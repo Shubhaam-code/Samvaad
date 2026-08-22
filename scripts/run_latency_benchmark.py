@@ -50,6 +50,15 @@ def parse_args():
         help="Number of initial warmup queries",
     )
     parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help=(
+            "Benchmark only the first N queries (0 = all). Useful in --mode live, "
+            "where every query spends real LLM and TTS API quota."
+        ),
+    )
+    parser.add_argument(
         "--output-json",
         type=str,
         default="evaluation/latency_report.json",
@@ -88,6 +97,9 @@ def main():
 
     with open(args.queries, "r", encoding="utf-8") as f:
         queries = json.load(f)
+
+    if args.limit and args.limit > 0:
+        queries = queries[: args.limit]
 
     print(f"Loaded {len(queries)} test queries.")
 

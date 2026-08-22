@@ -188,7 +188,7 @@ class OpenAIWhisperSTT(BaseSTT):
                     "(or set STT_BASE_URL to a local OpenAI-compatible endpoint)"
                 )
             self._client = OpenAI(
-                api_key=self._api_key or None,  # SDK uses None to skip auth header
+                api_key=self._api_key or "local",
                 base_url=self._base_url,
                 timeout=self._timeout_seconds,
             )

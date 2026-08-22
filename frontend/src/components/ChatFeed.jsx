@@ -30,7 +30,7 @@ function ChatFeed({ messages, activeCitationId, onCitationSelect, onPlayAnswer }
               <p>{message.text}</p>
               {message.role === 'assistant' && (
                 <div className="answer-actions">
-                  <button className="icon-button" type="button" onClick={() => onPlayAnswer(message.text)}>
+                  <button className="icon-button" type="button" onClick={() => onPlayAnswer(message.text, message.audioBase64)}>
                     <span className="material-icons" aria-hidden="true">
                       volume_up
                     </span>

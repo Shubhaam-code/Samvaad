@@ -44,10 +44,111 @@ _NUMERIC_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"\b\d+(?:\.\d+)?\b"
 )
 
-# Substantive word token pattern (English & Devanagari / Indic scripts)
+# Substantive word token pattern (English & Devanagari / Indic scripts).
+#
+# U+0964 (danda) and U+0965 (double danda) are punctuation but fall inside the
+# U+0900-U+0D7F Indic block, so a naive range glues them onto the final word of
+# every Hindi sentence ("है।"). Such tokens then match neither the stop-word
+# set nor any evidence token, which silently depressed grounding scores for
+# every Devanagari answer. Both are excluded here.
 _WORD_TOKEN_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"[a-zA-Z0-9\u0900-\u0D7F]+"
+    r"[a-zA-Z0-9\u0900-\u0963\u0966-\u0D7F]+"
 )
+
+
+# --- Refusal detection ----------------------------------------------------
+#
+# A refusal ("the provided context does not contain the answer") makes no
+# assertion about the world, so it cannot be ungrounded. Without this, a
+# correct refusal is flagged as UNGROUNDED_FLAGGED and the voice endpoint
+# returns 422 for answers that are in fact exactly what we want.
+#
+# The test is deliberately three-part so it cannot be used to smuggle a
+# fabrication past the verifier:
+#   1. the claim refers to the provided context/evidence, AND
+#   2. the claim contains an absence marker, AND
+#   3. the claim introduces no substantive token that is not already in the
+#      user's question or in the refusal frame vocabulary.
+#
+# Part 3 is what stops "The capital of Goa is Panduri, no other information
+# is available" from being read as a refusal: "panduri" appears in neither
+# the question nor the frame vocabulary.
+
+_CONTEXT_MARKERS: Final[tuple[str, ...]] = (
+    "provided", "context", "passage", "evidence", "document", "reference",
+    "given", "retrieved", "source", "information", "text", "data",
+    "संदर्भ", "प्रदान", "जानकारी", "पाठ", "दस्तावेज", "अंश", "सूचना",
+)
+
+_ABSENCE_MARKERS: Final[tuple[str, ...]] = (
+    "not contain", "does not contain", "do not contain", "doesn't contain",
+    "no information", "not mention", "does not mention", "not mentioned",
+    "cannot answer", "can not answer", "can't answer", "unable to answer",
+    "not provided", "not available", "no relevant", "not include",
+    "does not include", "not found", "no answer", "insufficient",
+    "do not know", "don't know", "not specify", "does not specify",
+    "not enough", "no mention", "not present",
+    # Hindi absence markers are compound on purpose: a bare "नहीं" is an
+    # ordinary negation and would match assertions too.
+    "जानकारी नहीं", "उल्लेख नहीं", "शामिल नहीं", "उपलब्ध नहीं",
+    "मौजूद नहीं", "पता नहीं", "स्पष्ट नहीं", "उत्तर नहीं", "सूचना नहीं",
+    "नहीं मिल", "नहीं दी", "नहीं दिया", "नहीं बताया", "नहीं किया गया",
+)
+
+# Words allowed to appear in a refusal without counting as new content.
+_REFUSAL_FRAME_WORDS: Final[set[str]] = {
+    # English frame
+    "the", "provided", "context", "contexts", "passage", "passages", "evidence",
+    "document", "documents", "reference", "references", "given", "retrieved",
+    "source", "sources", "information", "text", "texts", "data", "answer",
+    "question", "contain", "contains", "mention", "mentions", "mentioned",
+    "include", "includes", "included", "specify", "specifies", "available",
+    "found", "know", "about", "any", "relevant", "sufficient", "insufficient",
+    "enough", "present", "unable", "cannot", "unfortunately", "sorry",
+    "regarding", "related", "does", "no", "none", "nothing", "state", "stated",
+    "apologize", "however", "based", "only", "asked", "requested", "unclear",
+    # Hindi / Devanagari frame
+    "संदर्भ", "संदर्भों", "प्रदान", "जानकारी", "पाठ", "दस्तावेज", "अंश",
+    "सूचना", "उल्लेख", "शामिल", "उपलब्ध", "उत्तर", "प्रश्न", "बारे",
+    "कोई", "नहीं", "नही", "मिली", "मिला", "पता", "स्पष्ट", "गई", "गए",
+    "किए", "क्षमा", "करें", "दिए", "मौजूद", "आधार",
+}
+
+
+def _is_refusal_claim(claim: str, query_tokens: set[str]) -> bool:
+    """Return True when a claim is a refusal rather than a factual assertion.
+
+    Args:
+        claim: Single normalized sentence claim.
+        query_tokens: Substantive tokens from the user's question.
+
+    Returns:
+        True if the claim only declines to answer.
+    """
+    lowered = claim.lower()
+
+    if not any(marker in lowered for marker in _CONTEXT_MARKERS):
+        return False
+    if not any(marker in lowered for marker in _ABSENCE_MARKERS):
+        return False
+
+    claim_words, claim_numbers = _extract_tokens_and_numbers(claim)
+
+    # A refusal restates the question at most; it introduces no new numbers.
+    # Any figure absent from the evidence is exactly what we must catch.
+    if claim_numbers:
+        return False
+
+    novel = {
+        w for w in claim_words
+        if w not in _REFUSAL_FRAME_WORDS and w not in query_tokens
+    }
+
+    # One novel token is tolerated to absorb script mismatch: the user may ask
+    # "Goa की राजधानी क्या है?" and be answered in Devanagari ("गोवा"), which
+    # is the same topic word transliterated. Two or more novel tokens means the
+    # answer is introducing content, so it gets verified normally.
+    return len(novel) <= 1
 
 
 def _split_into_claims(answer: str) -> list[str]:
@@ -154,12 +255,16 @@ class GroundingVerifier:
         self,
         answer: str,
         retrieved_chunks: list[Chunk],
+        query: str | None = None,
     ) -> GuardrailResult:
         """Verify whether generated answer is supported by retrieved Chunk evidence.
 
         Args:
             answer: Generated answer text.
             retrieved_chunks: List of retrieved Chunk instances containing evidence text.
+            query: The user's question. When supplied, an answer that merely
+                declines to answer is treated as grounded instead of being
+                flagged, since a refusal asserts nothing about the world.
 
         Returns:
             GuardrailResult with verdict SAFE_AND_GROUNDED if all claims are supported,
@@ -192,6 +297,20 @@ class GroundingVerifier:
                 score=0.0,
                 flagged_claims=[answer.strip()],
             )
+
+        # A pure refusal is grounded by construction: it asserts nothing that
+        # could contradict the evidence. Checked before the empty-evidence
+        # branch, because "no evidence retrieved" is precisely the case where
+        # refusing is the correct behaviour.
+        if query is not None:
+            query_tokens, _ = _extract_tokens_and_numbers(normalize_text(query))
+            if all(_is_refusal_claim(c, query_tokens) for c in claims):
+                return GuardrailResult(
+                    verdict=GuardrailVerdict.SAFE_AND_GROUNDED,
+                    reason="Answer declines to answer; no factual claim to verify.",
+                    score=1.0,
+                    flagged_claims=[],
+                )
 
         # Extract evidence text from retrieved chunks (using Chunk.chunk_text)
         evidence_texts = [

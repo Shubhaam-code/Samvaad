@@ -276,6 +276,7 @@ def test_chat_safe_query_no_llm_returns_501():
 def test_chat_safe_query_no_index_returns_503():
     """Test that a safe query with an LLM but no index returns 503."""
     app.dependency_overrides[get_llm] = lambda: make_static_llm(CHUNK_TEXTS[0])
+    app.dependency_overrides[get_orchestrator] = lambda: None
 
     response = client.post("/api/chat", json={"query": "what is the best time to visit goa?"})
 

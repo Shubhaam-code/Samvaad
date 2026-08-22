@@ -540,6 +540,8 @@ def test_get_llm_non_openai_provider_returns_none(monkeypatch):
 def test_get_llm_configured_with_api_key(monkeypatch):
     """Test that an API key wires a real OpenAICompatibleLLM (no network)."""
     monkeypatch.setattr(settings, "llm_api_key", FAKE_KEY)
+    # Pin the model so the assertion does not depend on a local .env override.
+    monkeypatch.setattr(settings, "llm_model", DEFAULT_MODEL_NAME)
 
     llm = get_llm()
 

@@ -1611,3 +1611,113 @@ p {
     display: none;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Query Input Form & Quick Sample Pills                              */
+/* ------------------------------------------------------------------ */
+
+.query-input-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+  width: 100%;
+  max-width: 480px;
+}
+
+.query-text-input {
+  flex: 1;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 10px 18px;
+  font-size: 13px;
+  color: var(--ink);
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.query-text-input:focus {
+  border-color: var(--orange);
+  box-shadow: 0 0 0 3px rgba(234, 88, 12, 0.15);
+}
+
+.query-send-button {
+  background: var(--orange);
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.15s ease, opacity 0.2s ease;
+}
+
+.query-send-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.query-send-button:not(:disabled):hover {
+  transform: scale(1.05);
+}
+
+.query-send-button .material-icons {
+  font-size: 18px;
+}
+
+.sample-queries-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.sample-pill {
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.sample-pill:hover {
+  background: rgba(234, 88, 12, 0.1);
+  border-color: var(--orange);
+  color: var(--orange);
+}
+
+.upload-audio-button {
+  background: var(--soft);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 10px 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.upload-audio-button:hover {
+  border-color: var(--orange);
+  color: var(--orange);
+  background: rgba(234, 88, 12, 0.08);
+  transform: translateY(-1px);
+}
+
+.upload-audio-button .material-icons {
+  font-size: 18px;
+}

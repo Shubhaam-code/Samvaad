@@ -21,6 +21,9 @@ Phase 6.4: Real LLM provider
 """
 
 import logging
+import time
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,10 +41,50 @@ from app.tts.base import TTSError
 
 logger = logging.getLogger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Warm the retrieval stack before serving traffic.
+
+    Loading the sentence-transformer weights and running the first forward
+    pass costs several seconds. Doing it lazily meant the first user request
+    paid a ~7s retrieval penalty. Building the orchestrator here populates
+    the module-level cache and runs one throwaway embedding so the model
+    graph is initialized.
+
+    Warm-up failure is logged, not fatal: the app still starts and the
+    affected endpoint returns its normal 503.
+    """
+    try:
+        from app.api.dependencies import get_orchestrator
+
+        t0 = time.perf_counter()
+        orchestrator = get_orchestrator()
+        if orchestrator is None:
+            logger.warning(
+                "Startup warm-up skipped: no usable RAG index at '%s'. "
+                "/api/chat and /api/voice-query will return 503 until one is built.",
+                settings.rag_index_dir,
+            )
+        else:
+            # First real forward pass through the embedder.
+            orchestrator.retrieve("warm up")
+            logger.info(
+                "Retrieval stack warmed in %.0f ms (index='%s')",
+                (time.perf_counter() - t0) * 1000.0,
+                settings.rag_index_dir,
+            )
+    except Exception:  # noqa: BLE001 - warm-up must never block startup
+        logger.exception("Startup warm-up failed; continuing without a warm index")
+
+    yield
+
+
 app = FastAPI(
     title="HH Goa RAG Backend",
     version="0.1.0",
     description="Voice-Enabled RAG system backend (Phase 1 - foundation).",
+    lifespan=lifespan,
 )
 
 app.add_middleware(

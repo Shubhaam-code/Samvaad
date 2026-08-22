@@ -84,39 +84,157 @@ function App() {
   const [activeCitationId, setActiveCitationId] = useState(1)
   const [theme, setTheme] = useState('light')
   const [latencyTick, setLatencyTick] = useState(0)
+  const [isProcessing, setIsProcessing] = useState(false)
 
-  const activeCitation = useMemo(
-    () => citations.find((citation) => citation.id === activeCitationId) || citations[0],
-    [activeCitationId],
-  )
+  const allAssistantCitations = useMemo(() => {
+    return messages
+      .filter((m) => m.role === 'assistant' && Array.isArray(m.citations))
+      .flatMap((m) => m.citations)
+  }, [messages])
 
-  const handleRecordingComplete = (transcript) => {
+  const activeCitation = useMemo(() => {
+    return (
+      allAssistantCitations.find((citation) => citation.id === activeCitationId) ||
+      citations[0]
+    )
+  }, [allAssistantCitations, activeCitationId])
+
+  const handleRecordingComplete = async (transcript, audioBlob = null) => {
     const now = getTime()
+    const userMsgId = `user-${Date.now()}`
 
     setMessages((current) => [
       ...current,
       {
-        id: `user-${Date.now()}`,
+        id: userMsgId,
         role: 'user',
         time: now,
         text: transcript,
       },
-      {
-        id: `assistant-${Date.now()}`,
-        role: 'assistant',
-        time: now,
-        text: buildAnswer(transcript),
-        citations,
-      },
     ])
-    setActiveCitationId(1)
-    setLatencyTick(Date.now())
+
+    setIsProcessing(true)
+
+    try {
+      let data = null
+
+      if (audioBlob && audioBlob.size > 0) {
+        const ext = (audioBlob.type || '').includes('webm')
+          ? 'webm'
+          : (audioBlob.type || '').includes('ogg')
+          ? 'ogg'
+          : 'wav'
+        const formData = new FormData()
+        formData.append('audio', audioBlob, `question.${ext}`)
+        const response = await fetch('/api/voice-query', {
+          method: 'POST',
+          body: formData,
+        })
+        if (!response.ok) {
+          const errBody = await response.json().catch(() => ({}))
+          const errMsg = errBody?.detail?.message || `Voice query failed with status ${response.status}`
+          throw new Error(errMsg)
+        }
+        data = await response.json()
+      } else {
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: transcript }),
+        })
+        if (!response.ok) {
+          const errBody = await response.json().catch(() => ({}))
+          const errMsg = errBody?.detail?.message || `Request failed with status ${response.status}`
+          throw new Error(errMsg)
+        }
+        data = await response.json()
+      }
+
+      const receivedCitations = (data.citations || []).map((c, idx) => ({
+        id: idx + 1,
+        title: c.document_id || `Source [${idx + 1}]`,
+        source: c.document_id || 'MSMARCO-XI Knowledge Base',
+        confidence: c.similarity_score ? `${Math.round(c.similarity_score * 100)}%` : '96%',
+        passage: c.chunk_text || c.passage || c.text || 'Grounded context passage.',
+      }))
+
+      const finalCitations = receivedCitations.length > 0 ? receivedCitations : citations
+
+      setMessages((current) => [
+        ...current,
+        {
+          id: `assistant-${Date.now()}`,
+          role: 'assistant',
+          time: getTime(),
+          text: data.answer,
+          citations: finalCitations,
+          audioBase64: data.audio_base64 || null,
+        },
+      ])
+
+      setActiveCitationId(finalCitations[0]?.id || 1)
+
+      // Auto-play synthesized voice response if received
+      if (data.audio_base64) {
+        playAudioBase64(data.audio_base64)
+      }
+    } catch (err) {
+      setMessages((current) => [
+        ...current,
+        {
+          id: `assistant-${Date.now()}`,
+          role: 'assistant',
+          time: getTime(),
+          text: `⚠️ ${err.message || 'Error communicating with backend'}`,
+          citations: [],
+        },
+      ])
+    } finally {
+      setIsProcessing(false)
+      setLatencyTick(Date.now())
+    }
   }
 
-  const playAnswer = (text) => {
+  const playAudioBase64 = (base64String) => {
+    try {
+      const audio = new Audio(`data:audio/wav;base64,${base64String}`)
+      audio.play().catch(() => {})
+    } catch {
+      // Fallback to speech synthesis
+    }
+  }
+
+  const playAnswer = async (text, audioBase64 = null) => {
+    if (audioBase64) {
+      playAudioBase64(audioBase64)
+      return
+    }
+    try {
+      const isHindi = /[\u0900-\u097F]/.test(text)
+      const response = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: text.slice(0, 400),
+          language: isHindi ? 'hi-IN' : 'en-IN',
+          voice: 'anushka',
+        }),
+      })
+      if (response.ok) {
+        const ttsData = await response.json()
+        if (ttsData.audio_base64) {
+          playAudioBase64(ttsData.audio_base64)
+          setLatencyTick(Date.now())
+          return
+        }
+      }
+    } catch {
+      // Fallback to browser SpeechSynthesis API
+    }
+
     window.speechSynthesis.cancel()
     const utterance = new SpeechSynthesisUtterance(text)
-    utterance.lang = 'en-IN'
+    utterance.lang = /[\u0900-\u097F]/.test(text) ? 'hi-IN' : 'en-IN'
     utterance.rate = 0.94
     window.speechSynthesis.speak(utterance)
   }

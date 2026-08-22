@@ -15,6 +15,14 @@ backend/.env
 frontend/.env
 frontend/.env.*
 
+# --- Exported AI chat transcripts ---
+# These are verbatim session logs and have contained pasted API keys.
+# Never commit them; regenerate locally via scripts/export_chat_transcript.py.
+Samvaad_AI_Chat_*.md
+Samvaad_AI_Chat_*.html
+*_Chat_Export.md
+*_Chat_Export.html
+
 # --- Python ---
 __pycache__/
 *.py[cod]

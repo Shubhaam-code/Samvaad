@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from .base import (
     BaseSTT,
+    NoSpeechDetectedError,
     STTError,
     STTProtocol,
     validate_audio_bytes,
@@ -69,6 +70,7 @@ __all__ = [
     "BaseSTT",
     "STTProtocol",
     "STTError",
+    "NoSpeechDetectedError",
     "validate_audio_bytes",
     "validate_language",
     "validate_context_prompt",

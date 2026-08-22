@@ -3,10 +3,27 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    # The application reads backend/.env (see app/settings.py ENV_FILE). The
+    # previous value pointed at a repo-root .env that does not exist, so
+    # `docker compose up` aborted before starting anything. Copy
+    # backend/.env.example to backend/.env and fill in the keys.
     env_file:
-      - .env
+      - backend/.env
     environment:
       CORS_ALLOWED_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
+      # Resolved against the backend root inside the image (/app), so this is
+      # /app/data/index regardless of the working directory.
+      RAG_INDEX_DIR: data/index
+    # The vector index is a build artifact, not source: backend/data/index/ is
+    # gitignored, so it is absent from any clean clone. Mounting it keeps the
+    # host copy as the single source of truth and avoids rebuilding the image
+    # when the index is regenerated. If the directory is empty the backend
+    # still starts and logs a warning; /api/chat and /api/voice-query then
+    # return 503 until an index exists. Build one into the mount with:
+    #   docker compose run --rm backend \
+    #     python -m scripts.build_index --hf-split validation --limit 2000 --allow-download
+    volumes:
+      - ./backend/data/index:/app/data/index
     ports:
       - "8000:8000"
     restart: unless-stopped

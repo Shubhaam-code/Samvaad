@@ -1,0 +1,52 @@
+# Build-context exclusions. Without this file the whole repo is sent to the
+# daemon, including .git and virtualenvs, and any future broadened COPY would
+# bake secrets into an image layer.
+
+# Secrets - never copy real env files into an image. Configuration is supplied
+# at run time via docker-compose env_file / environment.
+**/.env
+**/.env.*
+!**/.env.example
+
+# Exported chat transcripts (may contain pasted credentials)
+Samvaad_AI_Chat_*
+*_Chat_Export.*
+
+# VCS and tooling
+.git
+.gitignore
+.github
+.kiro
+.vscode
+.idea
+
+# Python caches and local envs
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.venv
+**/venv
+**/env
+*.egg-info
+
+# Node - reinstalled from package-lock.json inside the image
+**/node_modules
+frontend/dist
+
+# Tests are not needed in a runtime image
+backend/tests
+
+# Large local data that is not the served index. backend/data/index is
+# deliberately NOT excluded: docker-compose mounts it, and a plain
+# `docker build` can still bake in a locally built index.
+backend/data/raw
+backend/data/processed
+backend/data/cache
+
+# Local artifacts
+*.log
+*.tmp
+.DS_Store
+Thumbs.db

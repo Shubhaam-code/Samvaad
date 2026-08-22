@@ -59,6 +59,17 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--delay",
+        type=float,
+        default=0.0,
+        help=(
+            "Seconds to pause between queries. Use in --mode live: back-to-back "
+            "cloud requests trip provider rate limits, and the resulting retry "
+            "backoff is charged to the stage timing, so an unpaced run measures "
+            "burst behaviour rather than single-user latency."
+        ),
+    )
+    parser.add_argument(
         "--output-json",
         type=str,
         default="evaluation/latency_report.json",
@@ -198,6 +209,7 @@ def main():
         queries=queries,
         warmup_count=args.warmup,
         progress_cb=progress_callback,
+        delay_seconds=args.delay,
     )
 
     print("\n\n" + "=" * 70)

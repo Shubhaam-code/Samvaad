@@ -27,6 +27,17 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+# app/settings.py -> app -> backend
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+
+# Absolute path to backend/.env. A bare ".env" is resolved against the current
+# working directory, so any tool launched from the repo root (benchmarks,
+# scripts, docker entrypoints) silently loaded no configuration at all and fell
+# back to unconfigured providers. Anchoring it to the backend root makes the
+# process behave the same wherever it is started from.
+ENV_FILE = BACKEND_ROOT / ".env"
+
+
 def _default_rag_index_dir() -> str:
     """Default RAG index directory, resolved relative to the backend root.
 
@@ -34,15 +45,14 @@ def _default_rag_index_dir() -> str:
     keeps the builder and the runtime consistent regardless of the
     current working directory.
     """
-    backend_root = Path(__file__).resolve().parents[1]
-    return str(backend_root / "data" / "index")
+    return str(BACKEND_ROOT / "data" / "index")
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables / .env file."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
     )

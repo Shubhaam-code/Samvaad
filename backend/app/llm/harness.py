@@ -92,6 +92,7 @@ class ModelOrchestrationHarness(BaseLLM):
                 model=self.model_name,
                 provider=self.provider,
                 latency_ms=0.0,
+                degraded=True,
             )
 
         last_error: Optional[Exception] = None
@@ -132,6 +133,7 @@ class ModelOrchestrationHarness(BaseLLM):
             model=self.model_name,
             provider=self.provider,
             latency_ms=0.0,
+            degraded=True,
         )
 
     def generate_batch(self, requests: list[LLMRequest]) -> list[LLMResponse]:

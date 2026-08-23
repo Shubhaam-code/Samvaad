@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_SARVAM_TTS_ENDPOINT = "https://api.sarvam.ai/text-to-speech"
 DEFAULT_SARVAM_TTS_MODEL = "bulbul:v2"
-DEFAULT_SARVAM_SPEAKER = "meera"
+DEFAULT_SARVAM_SPEAKER = "anushka"
 
 _SARVAM_LANG_MAP: dict[str, str] = {
     "hi": "hi-IN",
@@ -84,17 +84,18 @@ def is_sarvam_tts_configured(api_key: Optional[str]) -> bool:
     return bool(api_key.strip())
 
 
+# Speakers accepted by bulbul:v2, per the Sarvam API's own rejection message.
+# Keep this list exact: any name present here but unknown to the model is
+# forwarded verbatim and the request fails with HTTP 400. Names outside this
+# set fall back to the configured default speaker instead.
 SARVAM_SPEAKERS = {
-    "meera",
-    "pavithra",
-    "maitreyi",
-    "arvind",
-    "amartya",
-    "diya",
-    "ananya",
-    "kavya",
-    "rohan",
-    "vikram",
+    "anushka",
+    "abhilash",
+    "manisha",
+    "vidya",
+    "arya",
+    "karun",
+    "hitesh",
 }
 
 

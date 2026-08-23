@@ -27,6 +27,17 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+# app/settings.py -> app -> backend
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+
+# Absolute path to backend/.env. A bare ".env" is resolved against the current
+# working directory, so any tool launched from the repo root (benchmarks,
+# scripts, docker entrypoints) silently loaded no configuration at all and fell
+# back to unconfigured providers. Anchoring it to the backend root makes the
+# process behave the same wherever it is started from.
+ENV_FILE = BACKEND_ROOT / ".env"
+
+
 def _default_rag_index_dir() -> str:
     """Default RAG index directory, resolved relative to the backend root.
 
@@ -34,15 +45,14 @@ def _default_rag_index_dir() -> str:
     keeps the builder and the runtime consistent regardless of the
     current working directory.
     """
-    backend_root = Path(__file__).resolve().parents[1]
-    return str(backend_root / "data" / "index")
+    return str(BACKEND_ROOT / "data" / "index")
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables / .env file."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -51,7 +61,7 @@ class Settings(BaseSettings):
     cors_allowed_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     # LLM provider configuration ("groq", "openai_compatible", "fake")
-    llm_provider: str = "groq"
+    llm_provider: str = "openai_compatible"
     llm_api_key: Optional[str] = Field(
         None,
         description="LLM provider API key (from environment only)",
@@ -60,7 +70,7 @@ class Settings(BaseSettings):
         None,
         description="LLM base URL (None = provider default)",
     )
-    llm_model: str = "llama-3.1-8b-instant"
+    llm_model: str = "gpt-4o-mini"
     llm_timeout_seconds: float = Field(
         60.0,
         gt=0.0,
@@ -85,7 +95,9 @@ class Settings(BaseSettings):
         None,
         description="STT base URL (None = default provider endpoint)",
     )
-    stt_model: str = "saaras:v2"
+    # Feeds the OpenAI-Whisper STT path only; the Sarvam path uses
+    # sarvam_stt_model. Keep this a Whisper model id.
+    stt_model: str = "whisper-1"
     stt_language: Optional[str] = Field(
         None,
         description="Default STT language hint (None = automatic detection)",
@@ -112,7 +124,8 @@ class Settings(BaseSettings):
         description="TTS base URL (None = default provider endpoint)",
     )
     tts_model: str = "bulbul:v2"
-    tts_voice: str = "meera"
+    # Must be a speaker bulbul:v2 accepts (see app.tts.sarvam_tts.SARVAM_SPEAKERS).
+    tts_voice: str = "anushka"
     tts_output_format: str = "wav"
     tts_speed: float = Field(
         1.0,
@@ -141,9 +154,9 @@ class Settings(BaseSettings):
         None,
         description="Sarvam AI Subscription Key (from environment only)",
     )
-    sarvam_stt_model: str = "saaras:v2"
+    sarvam_stt_model: str = "saaras:v3"
     sarvam_tts_model: str = "bulbul:v2"
-    sarvam_speaker: str = "meera"
+    sarvam_speaker: str = "anushka"
     sarvam_tts_pace: float = Field(
         1.0,
         ge=0.5,

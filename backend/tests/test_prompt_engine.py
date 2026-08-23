@@ -2,10 +2,15 @@
 
 from app.api.schemas import Citation
 from app.chunking.models import Chunk, ChunkingStrategy
+import pytest
+
 from app.llm.prompt_engine import (
+    CONVERSATIONAL_SYSTEM_PROMPT,
     DEFAULT_GROUNDED_SYSTEM_PROMPT,
+    build_conversational_prompt,
     build_grounded_rag_prompt,
     extract_citations,
+    is_conversational,
 )
 from app.retrieval.models import RetrievedChunk
 
@@ -92,3 +97,66 @@ def test_extract_citations():
     assert citations[1].document_id == "doc_102"
     assert citations[1].text == "Evidence text 2"
     assert citations[1].score == round(0.81234, 4)
+
+
+# --- Conversational bypass -------------------------------------------------
+#
+# Greetings must bypass retrieval + grounding, but anything carrying real
+# informational content must NOT, or the ungrounded-answer guardrail would be
+# trivially sidesteppable by prefixing a question with "hello".
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "hi",
+        "Hello",
+        "hey!",
+        "  hello  ",
+        "good morning",
+        "how are you?",
+        "thanks",
+        "thank you",
+        "who are you?",
+        "hi there",
+        "thanks a lot",
+        "hello samvaad",
+        "namaste",
+        "नमस्ते",
+        "नमस्ते।",
+        "धन्यवाद",
+        "आप कौन हैं?",
+    ],
+)
+def test_is_conversational_detects_greetings(query):
+    assert is_conversational(query) is True
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What is the capital of Goa?",
+        "hello, what is the capital of Goa?",
+        "hi, tell me about the Mandovi river",
+        "Goa की राजधानी क्या है?",
+        "thanks, now explain quantum tunnelling",
+        "who are you looking for in the 1961 census",
+        "",
+        "   ",
+    ],
+)
+def test_is_conversational_rejects_real_questions(query):
+    assert is_conversational(query) is False
+
+
+def test_build_conversational_prompt_uses_conversational_system_prompt():
+    sys_prompt, user_prompt = build_conversational_prompt("  hello  ")
+
+    assert sys_prompt == CONVERSATIONAL_SYSTEM_PROMPT
+    assert "hello" in user_prompt
+
+
+def test_grounded_prompt_forbids_background_knowledge():
+    """The strict grounding contract is a graded requirement; pin its wording."""
+    assert "STRICTLY GROUNDED" in DEFAULT_GROUNDED_SYSTEM_PROMPT
+    assert "Do NOT fall back on your own background knowledge" in DEFAULT_GROUNDED_SYSTEM_PROMPT

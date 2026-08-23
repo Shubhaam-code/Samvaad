@@ -10,6 +10,7 @@ import pytest
 from app.stt.base import STTError
 from app.stt.models import STTRequest
 from app.stt.sarvam_stt import (
+    DEFAULT_SARVAM_STT_MODEL,
     SarvamSTT,
     _map_language_to_sarvam,
     _redact_key,
@@ -78,7 +79,9 @@ def test_sarvam_stt_successful_transcription():
 
     assert response.text == "भारत की राजधानी नई दिल्ली है।"
     assert response.language == "hi-IN"
-    assert response.model == "saaras:v2"
+    # Assert against the constant so bumping the default model does not
+    # silently break this test again.
+    assert response.model == DEFAULT_SARVAM_STT_MODEL
     assert response.provider == "sarvam"
     assert response.latency_ms is not None and response.latency_ms > 0.0
 

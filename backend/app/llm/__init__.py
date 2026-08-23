@@ -29,6 +29,7 @@ from .base import (
     validate_top_p,
 )
 from .circuit_breaker import CircuitBreaker, CircuitBreakerError, CircuitBreakerState
+from .config import LLMConfig, LLMProvider
 from .fake import FakeLLM, create_fake_llm
 from .groq_llm import (
     DEFAULT_GROQ_BASE_URL,

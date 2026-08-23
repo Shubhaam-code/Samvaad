@@ -35,6 +35,16 @@ class STTError(Exception):
     pass
 
 
+class NoSpeechDetectedError(STTError):
+    """Raised when a provider transcribes audio but finds no speech in it.
+
+    This is a property of the caller's audio, not a provider failure, so
+    endpoints map it to HTTP 400 rather than 500. It subclasses
+    ``STTError`` so existing broad handlers keep working.
+    """
+    pass
+
+
 def validate_audio_bytes(audio: object) -> bytes:
     """Validate a single audio input blob.
 

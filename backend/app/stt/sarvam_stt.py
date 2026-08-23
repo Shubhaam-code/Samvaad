@@ -22,6 +22,7 @@ import httpx
 
 from .base import (
     BaseSTT,
+    NoSpeechDetectedError,
     STTError,
     validate_language,
     validate_transcription_text,
@@ -32,7 +33,7 @@ from .validation import DEFAULT_MAX_AUDIO_BYTES, validate_audio
 logger = logging.getLogger(__name__)
 
 DEFAULT_SARVAM_STT_ENDPOINT = "https://api.sarvam.ai/speech-to-text"
-DEFAULT_SARVAM_STT_MODEL = "saaras:v2"
+DEFAULT_SARVAM_STT_MODEL = "saaras:v3"
 
 # Mapping ISO 639-1 / BCP-47 codes to Sarvam language_code
 _SARVAM_LANG_MAP: dict[str, str] = {
@@ -88,7 +89,7 @@ class SarvamSTT(BaseSTT):
 
     Args:
         api_key: Sarvam AI subscription key
-        model: Model identifier (default: "saaras:v2")
+        model: Model identifier (default: "saaras:v3")
         endpoint: API endpoint URL (default: "https://api.sarvam.ai/speech-to-text")
         timeout_seconds: Request timeout in seconds
         max_audio_bytes: Maximum allowed audio upload size
@@ -202,14 +203,19 @@ class SarvamSTT(BaseSTT):
         except Exception as exc:
             raise STTError(f"Failed to parse Sarvam STT JSON response: {exc}") from exc
 
-        transcript = payload.get("transcript", "")
+        transcript = (payload.get("transcript") or "").strip()
+        if not transcript:
+            # Valid audio, no speech in it: a caller-side condition, not a
+            # provider fault. Surfaced as HTTP 400 by /api/voice-query.
+            raise NoSpeechDetectedError(
+                "No speech could be recognized in the audio. "
+                "Please speak closer to the microphone and try again."
+            )
+
         detected_lang = payload.get("language_code", sarvam_lang)
 
-        # Validate that transcribed text is clean
-        transcript_clean = validate_transcription_text(transcript)
-
         return STTResponse(
-            text=transcript_clean,
+            text=transcript,
             language=detected_lang,
             confidence=None,
             duration_seconds=round(duration_sec, 3),

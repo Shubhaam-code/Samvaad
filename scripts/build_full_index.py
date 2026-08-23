@@ -23,9 +23,15 @@ import sys
 import time
 from pathlib import Path
 
-# Ensure backend package is in python path
+# Ensure the backend package is importable from both supported layouts:
+#   repo checkout -> <repo>/backend/app, script at <repo>/scripts
+#   container     -> /app/app,           script at /app/scripts
+# In the image the backend root IS the parent directory, so probing for a
+# nested "backend/" first and falling back keeps one script working in both.
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BACKEND_ROOT = REPO_ROOT / "backend"
+if not (BACKEND_ROOT / "app").is_dir():
+    BACKEND_ROOT = REPO_ROOT
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
@@ -88,8 +94,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="data/processed",
-        help="Output directory to save index.faiss, metadata.json, and schema.json",
+        default="data/index",
+        help=(
+            "Output directory for index.faiss, metadata.json and schema.json. "
+            "Relative paths resolve against the backend root, so the default "
+            "matches the directory the application loads (RAG_INDEX_DIR)."
+        ),
     )
     parser.add_argument(
         "--device",
@@ -128,7 +138,13 @@ def main() -> int:
     }
     chunk_strategy = strategy_map[args.chunker.lower()]
 
-    output_dir = REPO_ROOT / args.output_dir
+    # Resolve against the backend root, matching resolve_index_dir() in
+    # app/indexing/loader.py. Resolving against the repo root instead wrote the
+    # index to <repo>/data/processed while the application loaded
+    # backend/data/index, so a freshly built index was never picked up.
+    output_dir = Path(args.output_dir)
+    if not output_dir.is_absolute():
+        output_dir = BACKEND_ROOT / output_dir
     local_parquet = Path(args.local_parquet) if args.local_parquet else None
 
     config = DatasetIndexerConfig(

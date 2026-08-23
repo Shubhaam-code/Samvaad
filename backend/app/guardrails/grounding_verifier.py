@@ -44,10 +44,149 @@ _NUMERIC_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"\b\d+(?:\.\d+)?\b"
 )
 
-# Substantive word token pattern (English & Devanagari / Indic scripts)
-_WORD_TOKEN_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"[a-zA-Z0-9\u0900-\u0D7F]+"
+# Sentences that are nothing but a source attribution, e.g.
+# "(Source: Passage 2, Passage 4)" or "(स्रोत: Passage1)".
+# Plurals come first / use optional 's' so the alternation cannot match the
+# singular and leave a stray "s" behind as apparent content.
+_CITATION_MARKER_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"^\(?\s*(sources?|refs?|references?|cites?|citations?|from|see|"
+    r"स्रोत|सन्दर्भ|संदर्भ|उद्धरण)\b"
 )
+
+# Reference tokens removed to decide whether a marker carries real content.
+# Longest alternatives first: re.sub scans left to right without a word
+# boundary, so "refs?" placed before "references?" would strip "ref" and leave
+# "erences" looking like real content.
+_CITATION_RESIDUE_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(references?|refs?|citations?|cites?|sources?|from|see|"
+    r"सन्दर्भ|संदर्भ|स्रोत|उद्धरण|passages?|chunks?|documents?|docs?|ids?|"
+    r"अंश|पैसेज|and|&|\d+|[\s,;:.\-–—_()\[\]\"'])"
+)
+
+# Substantive word token pattern (English & Devanagari / Indic scripts).
+#
+# U+0964 (danda) and U+0965 (double danda) are punctuation but fall inside the
+# U+0900-U+0D7F Indic block, so a naive range glues them onto the final word of
+# every Hindi sentence ("है।"). Such tokens then match neither the stop-word
+# set nor any evidence token, which silently depressed grounding scores for
+# every Devanagari answer. Both are excluded here.
+_WORD_TOKEN_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"[a-zA-Z0-9\u0900-\u0963\u0966-\u0D7F]+"
+)
+
+
+# --- Refusal detection ----------------------------------------------------
+#
+# A refusal ("the provided context does not contain the answer") makes no
+# assertion about the world, so it cannot be ungrounded. Without this, a
+# correct refusal is flagged as UNGROUNDED_FLAGGED and the voice endpoint
+# returns 422 for answers that are in fact exactly what we want.
+#
+# The test is deliberately three-part so it cannot be used to smuggle a
+# fabrication past the verifier:
+#   1. the claim refers to the provided context/evidence, AND
+#   2. the claim contains an absence marker, AND
+#   3. the claim introduces no substantive token that is not already in the
+#      user's question or in the refusal frame vocabulary.
+#
+# Part 3 is what stops "The capital of Goa is Panduri, no other information
+# is available" from being read as a refusal: "panduri" appears in neither
+# the question nor the frame vocabulary.
+
+_CONTEXT_MARKERS: Final[tuple[str, ...]] = (
+    "provided", "context", "passage", "evidence", "document", "reference",
+    "given", "retrieved", "source", "information", "text", "data",
+    "संदर्भ", "प्रदान", "जानकारी", "पाठ", "दस्तावेज", "अंश", "सूचना",
+)
+
+_ABSENCE_MARKERS: Final[tuple[str, ...]] = (
+    "not contain", "does not contain", "do not contain", "doesn't contain",
+    "no information", "not mention", "does not mention", "not mentioned",
+    "cannot answer", "can not answer", "can't answer", "unable to answer",
+    "not provided", "not available", "no relevant", "not include",
+    "does not include", "not found", "no answer", "insufficient",
+    "do not know", "don't know", "not specify", "does not specify",
+    "not enough", "no mention", "not present",
+    # Hindi absence markers are compound on purpose: a bare "नहीं" is an
+    # ordinary negation and would match assertions too.
+    "जानकारी नहीं", "उल्लेख नहीं", "शामिल नहीं", "उपलब्ध नहीं",
+    "मौजूद नहीं", "पता नहीं", "स्पष्ट नहीं", "उत्तर नहीं", "सूचना नहीं",
+    "नहीं मिल", "नहीं दी", "नहीं दिया", "नहीं बताया", "नहीं किया गया",
+)
+
+# Words allowed to appear in a refusal without counting as new content.
+_REFUSAL_FRAME_WORDS: Final[set[str]] = {
+    # English frame
+    "the", "provided", "context", "contexts", "passage", "passages", "evidence",
+    "document", "documents", "reference", "references", "given", "retrieved",
+    "source", "sources", "information", "text", "texts", "data", "answer",
+    "question", "contain", "contains", "mention", "mentions", "mentioned",
+    "include", "includes", "included", "specify", "specifies", "available",
+    "found", "know", "about", "any", "relevant", "sufficient", "insufficient",
+    "enough", "present", "unable", "cannot", "unfortunately", "sorry",
+    "regarding", "related", "does", "no", "none", "nothing", "state", "stated",
+    "apologize", "however", "based", "only", "asked", "requested", "unclear",
+    # Hindi / Devanagari frame
+    "संदर्भ", "संदर्भों", "प्रदान", "जानकारी", "पाठ", "दस्तावेज", "अंश",
+    "सूचना", "उल्लेख", "शामिल", "उपलब्ध", "उत्तर", "प्रश्न", "बारे",
+    "कोई", "नहीं", "नही", "मिली", "मिला", "पता", "स्पष्ट", "गई", "गए",
+    "किए", "क्षमा", "करें", "दिए", "मौजूद", "आधार",
+}
+
+
+def _is_refusal_claim(claim: str, query_tokens: set[str]) -> bool:
+    """Return True when a claim is a refusal rather than a factual assertion.
+
+    Args:
+        claim: Single normalized sentence claim.
+        query_tokens: Substantive tokens from the user's question.
+
+    Returns:
+        True if the claim only declines to answer.
+    """
+    lowered = claim.lower()
+
+    if not any(marker in lowered for marker in _CONTEXT_MARKERS):
+        return False
+    if not any(marker in lowered for marker in _ABSENCE_MARKERS):
+        return False
+
+    claim_words, claim_numbers = _extract_tokens_and_numbers(claim)
+
+    # A refusal restates the question at most; it introduces no new numbers.
+    # Any figure absent from the evidence is exactly what we must catch.
+    if claim_numbers:
+        return False
+
+    novel = {
+        w for w in claim_words
+        if w not in _REFUSAL_FRAME_WORDS and w not in query_tokens
+    }
+
+    # One novel token is tolerated to absorb script mismatch: the user may ask
+    # "Goa की राजधानी क्या है?" and be answered in Devanagari ("गोवा"), which
+    # is the same topic word transliterated. Two or more novel tokens means the
+    # answer is introducing content, so it gets verified normally.
+    return len(novel) <= 1
+
+
+def _is_citation_marker(text: str) -> bool:
+    """Return True when a sentence is only a source/passage reference.
+
+    A model may append "(Source: Passage 2, Passage 4)" or the Devanagari
+    equivalent. That is bibliographic metadata, not an assertion about the
+    world, and it has no lexical overlap with evidence by construction, so
+    scoring it as a claim drags an otherwise grounded answer below threshold.
+    """
+    stripped = text.strip().strip("()[]. \t")
+    if not stripped:
+        return True
+    lowered = stripped.lower()
+    if not _CITATION_MARKER_PATTERN.match(lowered):
+        return False
+    # Only treat it as a marker when nothing but reference tokens remain.
+    residue = _CITATION_RESIDUE_PATTERN.sub("", lowered).strip(" ,;:.-–—")
+    return not residue
 
 
 def _split_into_claims(answer: str) -> list[str]:
@@ -62,6 +201,8 @@ def _split_into_claims(answer: str) -> list[str]:
     raw_sentences = _SENTENCE_SPLIT_PATTERN.split(answer.strip())
     claims: list[str] = []
     for s in raw_sentences:
+        if _is_citation_marker(s):
+            continue
         norm = normalize_text(s)
         if norm:
             claims.append(norm)
@@ -154,12 +295,16 @@ class GroundingVerifier:
         self,
         answer: str,
         retrieved_chunks: list[Chunk],
+        query: str | None = None,
     ) -> GuardrailResult:
         """Verify whether generated answer is supported by retrieved Chunk evidence.
 
         Args:
             answer: Generated answer text.
             retrieved_chunks: List of retrieved Chunk instances containing evidence text.
+            query: The user's question. When supplied, an answer that merely
+                declines to answer is treated as grounded instead of being
+                flagged, since a refusal asserts nothing about the world.
 
         Returns:
             GuardrailResult with verdict SAFE_AND_GROUNDED if all claims are supported,
@@ -193,6 +338,20 @@ class GroundingVerifier:
                 flagged_claims=[answer.strip()],
             )
 
+        # A pure refusal is grounded by construction: it asserts nothing that
+        # could contradict the evidence. Checked before the empty-evidence
+        # branch, because "no evidence retrieved" is precisely the case where
+        # refusing is the correct behaviour.
+        if query is not None:
+            query_tokens, _ = _extract_tokens_and_numbers(normalize_text(query))
+            if all(_is_refusal_claim(c, query_tokens) for c in claims):
+                return GuardrailResult(
+                    verdict=GuardrailVerdict.SAFE_AND_GROUNDED,
+                    reason="Answer declines to answer; no factual claim to verify.",
+                    score=1.0,
+                    flagged_claims=[],
+                )
+
         # Extract evidence text from retrieved chunks (using Chunk.chunk_text)
         evidence_texts = [
             normalize_text(chunk.chunk_text)
@@ -213,8 +372,21 @@ class GroundingVerifier:
         unsupported_claims: list[str] = []
         claim_scores: list[float] = []
 
-        # Support score threshold: >= 0.55 required for a claim to be considered grounded
-        _SUPPORT_THRESHOLD = 0.55
+        # Calibrated against the live index rather than chosen by feel. Measured
+        # on real retrieved evidence:
+        #
+        #   grounded paraphrases (same language)   0.408, 0.494, 0.826
+        #   unsupported / fabricated claims        0.023 - 0.053
+        #
+        # The old 0.55 sat *above* the grounded band, so faithful paraphrases of
+        # the evidence were flagged and /api/voice-query returned 422 with no
+        # audio for correct answers. 0.30 sits in the empty gap between the two
+        # bands: still ~6x the highest unsupported score, so fabrication
+        # detection is not weakened, while genuine paraphrase now passes.
+        #
+        # Numeric claims are unaffected: a figure absent from the evidence is
+        # rejected by Rule 1 above regardless of this threshold.
+        _SUPPORT_THRESHOLD = 0.30
 
         for claim in claims:
             score = _evaluate_claim_support(claim, evidence_texts)

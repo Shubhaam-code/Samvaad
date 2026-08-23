@@ -42,6 +42,12 @@ from app.guardrails.grounding_verifier import GroundingVerifier
 from app.guardrails.models import GuardrailResult, GuardrailVerdict
 from app.guardrails.pipeline import GuardrailPipeline
 from app.llm.models import LLMRequest
+from app.llm.prompt_engine import (
+    build_conversational_prompt,
+    build_grounded_rag_prompt,
+    extract_citations,
+    is_conversational,
+)
 from app.retrieval.orchestrator import RetrievalOrchestrator
 
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -123,6 +129,48 @@ def chat(
             },
         )
 
+    # Greetings / small talk make no factual claim, so they bypass retrieval and
+    # grounding entirely. Running them through the pipeline would attach
+    # irrelevant citations and get a friendly reply flagged as ungrounded.
+    if is_conversational(query):
+        t_stage = time.perf_counter()
+        sys_prompt, user_prompt = build_conversational_prompt(query)
+        llm_response = llm.generate(LLMRequest(prompt=user_prompt, system_prompt=sys_prompt))
+        llm_ms = _ms(t_stage)
+        total_ms = _ms(t_total)
+
+        record_success(
+            {
+                "stt_ms": 0.0,
+                "retrieval_ms": 0.0,
+                "llm_ms": llm_ms,
+                "tts_ms": 0.0,
+                "guardrail_ms": guardrail_ms,
+                "grounding_ms": 0.0,
+                "total_ms": total_ms,
+            }
+        )
+
+        return ChatResponse(
+            answer=llm_response.text,
+            citations=[],
+            guardrail=guardrail_result,
+            grounding=GuardrailResult(
+                verdict=GuardrailVerdict.SAFE_AND_GROUNDED,
+                reason="Conversational turn; no factual claim to verify.",
+                score=1.0,
+                flagged_claims=[],
+            ),
+            latency_breakdown=LatencyBreakdown(
+                guardrail_ms=guardrail_ms,
+                retrieval_ms=0.0,
+                llm_ms=llm_ms,
+                grounding_ms=0.0,
+                total_ms=total_ms,
+            ),
+            model=llm_response.model,
+        )
+
     # Stage 4: retrieval (guardrail -> embed -> search -> resolve)
     retrieval_result = orchestrator.retrieve(query)
     retrieval_ms = round(
@@ -134,7 +182,6 @@ def chat(
 
     # Stage 5: LLM generation (real provider with grounded context)
     t_stage = time.perf_counter()
-    from app.llm.prompt_engine import build_grounded_rag_prompt, extract_citations  # noqa: PLC0415
     sys_prompt, user_prompt = build_grounded_rag_prompt(
         query=query,
         retrieved_chunks=retrieval_result.retrieved_chunks,
@@ -142,10 +189,28 @@ def chat(
     llm_response = llm.generate(LLMRequest(prompt=user_prompt, system_prompt=sys_prompt))
     llm_ms = _ms(t_stage)
 
+    # A degraded response is the resilience harness's canned outage text, not a
+    # generation. Reporting it as an answer sent it through grounding, where it
+    # was flagged as unsupported - turning a provider rate limit into a
+    # misleading "ungrounded answer" verdict. Surface the outage instead.
+    if getattr(llm_response, "degraded", False):
+        record_error()
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "LLM_UNAVAILABLE",
+                "message": (
+                    "The language model provider is unavailable or rate limited, "
+                    "so no answer could be generated. This is a provider outage, "
+                    "not an ungrounded answer."
+                ),
+            },
+        )
+
     # Stage 6: post-generation grounding verification
     t_stage = time.perf_counter()
     evidence_chunks = [item.chunk for item in retrieval_result.retrieved_chunks]
-    grounding_result = grounding_verifier.verify(llm_response.text, evidence_chunks)
+    grounding_result = grounding_verifier.verify(llm_response.text, evidence_chunks, query=query)
     grounding_ms = _ms(t_stage)
 
     # Stage 7: structured citations from actual retrieved Chunk evidence

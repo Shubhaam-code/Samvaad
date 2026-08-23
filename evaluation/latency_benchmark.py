@@ -7,7 +7,7 @@ measures high-precision nanosecond timings, calculates exact percentiles
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import json
 import logging
@@ -98,6 +98,11 @@ class BenchmarkReport:
     sla_target_ms: float
     sla_passed: bool
     runs: List[LatencyStageMetrics]
+    # Which implementations actually produced these timings. Without this a
+    # report generated against FakeLLM/FakeTTS is indistinguishable from one
+    # measured against the real cloud providers, and sub-millisecond stub
+    # timings get published as though they were achievable.
+    provider_modes: Dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize benchmark report to dictionary."""
@@ -107,6 +112,7 @@ class BenchmarkReport:
             "system_info": self.system_info,
             "sla_target_ms": self.sla_target_ms,
             "sla_passed": self.sla_passed,
+            "provider_modes": self.provider_modes,
             "stage_statistics": {
                 stage: asdict(stat) for stage, stat in self.stage_statistics.items()
             },
@@ -152,13 +158,60 @@ class BenchmarkReport:
                 f"| {label} | `{s.p50:.2f}` | `{s.p70:.2f}` | `{s.p90:.2f}` | `{s.p95:.2f}` | `{s.p100:.2f}` | `{s.mean:.2f}` | {budget} |"
             )
 
+        e2e = stat.get("total_e2e_ms", PercentileStat(0, 0, 0, 0, 0, 0, 0, 0))
+        retrieval = stat.get("retrieval_total_ms", PercentileStat(0, 0, 0, 0, 0, 0, 0, 0))
+        llm_stat = stat.get("llm_generation_ms", PercentileStat(0, 0, 0, 0, 0, 0, 0, 0))
+        tts_stat = stat.get("tts_ms", PercentileStat(0, 0, 0, 0, 0, 0, 0, 0))
+
+        guardrail_stat = stat.get("guardrail_ms", PercentileStat(0, 0, 0, 0, 0, 0, 0, 0))
+        grounding_stat = stat.get("grounding_ms", PercentileStat(0, 0, 0, 0, 0, 0, 0, 0))
+
+        network_p50 = llm_stat.p50 + tts_stat.p50
+        network_share = (network_p50 / e2e.p50 * 100.0) if e2e.p50 else 0.0
+        llm_variance = (llm_stat.p100 / llm_stat.p50) if llm_stat.p50 else 0.0
+        local_p50 = retrieval.p50 + guardrail_stat.p50 + grounding_stat.p50
+
+        if self.provider_modes:
+            lines.extend([
+                "",
+                "## ⚙️ Measured Components",
+                "",
+                "| Stage | Implementation |",
+                "| :--- | :--- |",
+            ])
+            for role, impl in self.provider_modes.items():
+                lines.append(f"| {role} | `{impl}` |")
+            if any("STUB" in v for v in self.provider_modes.values()):
+                lines.extend([
+                    "",
+                    "> ⚠️ One or more stages were measured against in-process stubs. "
+                    "Those rows reflect harness overhead only and must not be read as "
+                    "achievable end-to-end performance.",
+                ])
+
         lines.extend([
             "",
             "---",
-            "### 🎯 Key Performance Insights",
-            f"1. **P50 Total Latency:** `{total_p50:.2f}ms` achieves real-time interactive voice conversation.",
-            f"2. **P70 Total Latency:** `{stat.get('total_e2e_ms', PercentileStat(0,0,0,0,0,0,0,0)).p70:.2f}ms` stays well beneath the 200ms deadline under normal load.",
-            f"3. **P100 (Worst Case):** `{stat.get('total_e2e_ms', PercentileStat(0,0,0,0,0,0,0,0)).p100:.2f}ms` validates zero hanging requests across 100+ multilingual queries.",
+            "### 🎯 Findings",
+            "",
+            f"1. **End-to-end P50 is `{e2e.p50:.2f}ms`** against a `{self.sla_target_ms:g}ms` target "
+            f"({'within' if self.sla_passed else 'over'} budget). "
+            f"P95 is `{e2e.p95:.2f}ms`, P100 `{e2e.p100:.2f}ms`.",
+            f"2. **Local compute is not the bottleneck.** Retrieval P50 is `{retrieval.p50:.2f}ms` "
+            f"(embedding + FAISS + rerank).",
+            f"3. **Third-party API calls dominate.** LLM P50 `{llm_stat.p50:.2f}ms` + TTS P50 "
+            f"`{tts_stat.p50:.2f}ms` = `{network_p50:.2f}ms`, about "
+            f"{network_share:.0f}% of end-to-end latency. These are network-bound and "
+            f"not reducible by local optimization.",
+            f"4. **Tail latency is driven by LLM generation variance.** LLM P100 "
+            f"`{llm_stat.p100:.2f}ms` is {llm_variance:.0f}x its P50 of `{llm_stat.p50:.2f}ms`. "
+            f"On a reasoning-class model most completion tokens are spent deliberating "
+            f"rather than on the answer text, so a short reply can still be slow and the "
+            f"spread between a fast and a slow response is large.",
+            f"5. **The `{self.sla_target_ms:g}ms` target is not reachable while the LLM and TTS "
+            f"are remote API calls.** Retrieval, guardrail, and grounding together are "
+            f"`{local_p50:.2f}ms` at P50, so the budget is only meaningful as a local-compute "
+            f"target. Meeting it end to end would require on-device or streamed generation.",
             "",
         ])
 
@@ -215,6 +268,7 @@ class LatencyBenchmarkRunner:
         rerank_ms = 0.0
         retrieval_total_ms = 0.0
         retrieved_chunks = []
+        ret_res = None
 
         if self.orchestrator is not None:
             t0 = time.perf_counter()
@@ -226,12 +280,27 @@ class LatencyBenchmarkRunner:
             retrieved_chunks = [item.chunk for item in getattr(ret_res, "retrieved_chunks", [])]
 
         # 3. LLM Generation
+        #
+        # Uses the same grounded prompt builder as /api/chat. Sending the bare
+        # query instead (no system prompt, no evidence) measures a different
+        # operation entirely: the model answers open-domain from pretraining and
+        # emits far more tokens, so the stage timing does not describe the
+        # pipeline being shipped.
         llm_ms = 0.0
         answer_text = "Sample response"
         if self.llm is not None:
             from app.llm.models import LLMRequest
+            from app.llm.prompt_engine import build_grounded_rag_prompt
+
+            retrieved_items = list(getattr(ret_res, "retrieved_chunks", [])) if ret_res else []
+            sys_prompt, user_prompt = build_grounded_rag_prompt(
+                query=query_text,
+                retrieved_chunks=retrieved_items,
+            )
             t0 = time.perf_counter()
-            llm_res = self.llm.generate(LLMRequest(prompt=query_text))
+            llm_res = self.llm.generate(
+                LLMRequest(prompt=user_prompt, system_prompt=sys_prompt)
+            )
             llm_ms = (time.perf_counter() - t0) * 1000.0
             answer_text = getattr(llm_res, "text", answer_text)
 
@@ -239,15 +308,19 @@ class LatencyBenchmarkRunner:
         grounding_ms = 0.0
         if self.grounding is not None:
             t0 = time.perf_counter()
-            self.grounding.verify(answer_text, retrieved_chunks)
+            self.grounding.verify(answer_text, retrieved_chunks, query=query_text)
             grounding_ms = (time.perf_counter() - t0) * 1000.0
 
         # 5. Voice TTS Synthesis (optional simulation or live)
+        #
+        # Synthesizes the whole answer, matching /api/voice-query. Truncating to
+        # 100 characters understates the stage, since TTS cost scales with text
+        # length.
         tts_ms = 0.0
         if self.tts is not None:
             from app.tts.models import TTSRequest
             t0 = time.perf_counter()
-            self.tts.synthesize(TTSRequest(text=answer_text[:100], language=lang))
+            self.tts.synthesize(TTSRequest(text=answer_text, language=lang))
             tts_ms = (time.perf_counter() - t0) * 1000.0
 
         total_e2e_ms = (time.perf_counter() - t_total_start) * 1000.0
@@ -272,13 +345,27 @@ class LatencyBenchmarkRunner:
         queries: List[Dict[str, Any]],
         warmup_count: int = 5,
         progress_cb: Optional[Callable[[int, int], None]] = None,
+        delay_seconds: float = 0.0,
     ) -> BenchmarkReport:
-        """Run warmups followed by full query benchmark, calculating percentiles."""
+        """Run warmups followed by full query benchmark, calculating percentiles.
+
+        Args:
+            queries: Query items to benchmark.
+            warmup_count: Leading queries used only to prime caches.
+            progress_cb: Optional progress callback.
+            delay_seconds: Pause between queries. Firing cloud LLM/TTS requests
+                back to back trips provider rate limits, and the retry plus
+                backoff that follows is charged to the stage timing. That
+                measures burst behaviour, not the latency a single user sees,
+                so pace the run when reporting interactive numbers.
+        """
         logger.info("Starting latency benchmark on %d queries (warmup: %d)...", len(queries), warmup_count)
 
         # Warm-up runs to ensure model caches & JIT compilation are primed
         for i in range(min(warmup_count, len(queries))):
             self.run_query(queries[i])
+            if delay_seconds > 0:
+                time.sleep(delay_seconds)
 
         runs: List[LatencyStageMetrics] = []
         for idx, q in enumerate(queries):
@@ -286,6 +373,8 @@ class LatencyBenchmarkRunner:
             runs.append(metric)
             if progress_cb is not None:
                 progress_cb(idx + 1, len(queries))
+            if delay_seconds > 0 and idx < len(queries) - 1:
+                time.sleep(delay_seconds)
 
         # Compute percentiles for all stages
         stage_names = [
@@ -322,4 +411,24 @@ class LatencyBenchmarkRunner:
             sla_target_ms=self.sla_target_ms,
             sla_passed=sla_passed,
             runs=runs,
+            provider_modes=self._provider_modes(),
         )
+
+    def _provider_modes(self) -> Dict[str, str]:
+        """Record the concrete implementation behind each measured stage.
+
+        Derived from the live objects rather than a caller-supplied flag, so a
+        report cannot claim real providers while timing stubs.
+        """
+
+        def describe(component: Optional[Any]) -> str:
+            if component is None:
+                return "not configured"
+            name = type(component).__name__
+            return f"{name} (STUB - not representative)" if "Fake" in name else name
+
+        return {
+            "embedder": describe(getattr(self.orchestrator, "embedder", None)),
+            "llm": describe(self.llm),
+            "tts": describe(self.tts),
+        }

@@ -22,39 +22,22 @@ const pipeline = [
   ['volume_up', 'Voice'],
 ]
 
-const citations = [
-  {
-    id: 1,
-    title: 'Q3 revenue increased 24%',
-    source: 'FY26 Q3 Board Brief, page 4',
-    confidence: '98%',
-    passage:
-      'Revenue grew 24% year-over-year in Q3, supported by enterprise renewals, new EMEA deployments, and stronger expansion revenue from regulated customers.',
-  },
-  {
-    id: 2,
-    title: 'EMEA and retention were primary drivers',
-    source: 'Revenue Operations Memo, section 2',
-    confidence: '94%',
-    passage:
-      'The largest contribution came from EMEA market expansion. Enterprise retention improved by 15%, with health, finance, and government accounts leading net revenue retention.',
-  },
-]
+// No seeded citations. This previously held an invented "Q3 revenue" example
+// that was rendered identically to real retrieval output and was also used as a
+// fallback whenever a response carried no citations, so fabricated sources
+// appeared alongside genuine ones. Citations must only ever come from the API.
+const citations = []
 
 const firstMessages = [
   {
-    id: 'example-user',
-    role: 'user',
-    time: 'Now',
-    text: 'What was our Q3 revenue growth and the main drivers behind it?',
-  },
-  {
-    id: 'example-assistant',
+    id: 'welcome',
     role: 'assistant',
     time: 'Now',
     text:
-      'Revenue grew by 24% year-over-year. The primary drivers were the expansion into the EMEA market and a 15% increase in retention from enterprise clients.',
-    citations,
+      'Ask a question by voice or text. Answers are grounded strictly in the indexed ' +
+      'MSMARCO-XI corpus, and every claim is checked against the passages retrieved ' +
+      'for it. If the corpus does not cover your question, I will say so rather than guess.',
+    citations: [],
   },
 ]
 
@@ -75,8 +58,60 @@ function getTime() {
   }).format(new Date())
 }
 
-function buildAnswer() {
-  return 'Revenue grew by 24% year-over-year. The answer is grounded in the board brief and revenue operations memo, with EMEA expansion and stronger enterprise retention showing up as the main drivers.'
+/**
+ * Turn an API error body into something a person can act on.
+ *
+ * Raw text like "failed with status 422" told the user nothing: 422 is the
+ * grounding refusal, which is the system working as intended, and it read as a
+ * crash. Each code gets an explanation of what actually happened.
+ */
+function describeApiError(errBody, status) {
+  const detail = errBody?.detail ?? {}
+  const code = detail.code
+
+  if (code === 'UNGROUNDED_ANSWER') {
+    const reason = detail.reason ? ` ${detail.reason}` : ''
+    return (
+      'I could not verify that answer against the retrieved passages, so I did not ' +
+      `read it aloud.${reason} Try rephrasing, or ask something the indexed corpus covers.`
+    )
+  }
+  if (code === 'LLM_UNAVAILABLE') {
+    return 'The language model provider is rate limited or unavailable right now, so no answer could be generated. This is a provider limit, not a problem with your question.'
+  }
+  if (code === 'NO_SPEECH_DETECTED') {
+    return 'No speech was detected in that recording. Speak a little closer to the microphone and try again.'
+  }
+  if (code === 'QUERY_REJECTED') {
+    return `That request was blocked by the input guardrail.${detail.reason ? ` ${detail.reason}` : ''}`
+  }
+  if (code === 'LLM_PROVIDER_NOT_CONFIGURED' || code === 'TTS_PROVIDER_NOT_CONFIGURED') {
+    return 'A required provider is not configured on the server.'
+  }
+  if (status === 503) {
+    return detail.message || 'The knowledge base index is unavailable, so no grounded answer can be produced yet.'
+  }
+  return detail.message || `Request failed with status ${status}.`
+}
+
+/** Short, readable heading for a citation card, taken from the passage text. */
+function buildCitationTitle(citation, index) {
+  const text = (citation.text || citation.chunk_text || citation.passage || '').trim()
+  if (!text) return `Source [${index + 1}]`
+  const collapsed = text.replace(/\s+/g, ' ')
+  if (collapsed.length <= 72) return collapsed
+  // Prefer breaking on a word boundary so the heading does not end mid-word.
+  const cut = collapsed.slice(0, 72)
+  const lastSpace = cut.lastIndexOf(' ')
+  return `${(lastSpace > 40 ? cut.slice(0, lastSpace) : cut).trim()}…`
+}
+
+/** Render the retrieval score as a percentage, or a dash when absent. */
+function formatScore(score) {
+  const value = Number(score)
+  if (!Number.isFinite(value)) return '—'
+  const pct = value <= 1 ? value * 100 : value
+  return `${Math.round(Math.max(0, Math.min(100, pct)))}%`
 }
 
 function App() {
@@ -84,39 +119,177 @@ function App() {
   const [activeCitationId, setActiveCitationId] = useState(1)
   const [theme, setTheme] = useState('light')
   const [latencyTick, setLatencyTick] = useState(0)
+  const [isProcessing, setIsProcessing] = useState(false)
 
-  const activeCitation = useMemo(
-    () => citations.find((citation) => citation.id === activeCitationId) || citations[0],
-    [activeCitationId],
-  )
+  const allAssistantCitations = useMemo(() => {
+    return messages
+      .filter((m) => m.role === 'assistant' && Array.isArray(m.citations))
+      .flatMap((m) => m.citations)
+  }, [messages])
 
-  const handleRecordingComplete = (transcript) => {
+  // May be undefined until the first answer arrives; the drawer renders an
+  // empty state for that case rather than dereferencing a seeded placeholder.
+  const activeCitation = useMemo(() => {
+    return (
+      allAssistantCitations.find((citation) => citation.id === activeCitationId) ||
+      allAssistantCitations[0]
+    )
+  }, [allAssistantCitations, activeCitationId])
+
+  const handleRecordingComplete = async (transcript, audioBlob = null) => {
     const now = getTime()
+    const userMsgId = `user-${Date.now()}`
 
     setMessages((current) => [
       ...current,
       {
-        id: `user-${Date.now()}`,
+        id: userMsgId,
         role: 'user',
         time: now,
         text: transcript,
       },
-      {
-        id: `assistant-${Date.now()}`,
-        role: 'assistant',
-        time: now,
-        text: buildAnswer(transcript),
-        citations,
-      },
     ])
-    setActiveCitationId(1)
-    setLatencyTick(Date.now())
+
+    setIsProcessing(true)
+
+    try {
+      let data = null
+
+      if (audioBlob && audioBlob.size > 0) {
+        const ext = (audioBlob.type || '').includes('webm')
+          ? 'webm'
+          : (audioBlob.type || '').includes('ogg')
+          ? 'ogg'
+          : 'wav'
+        const formData = new FormData()
+        formData.append('audio', audioBlob, `question.${ext}`)
+        const response = await fetch('/api/voice-query', {
+          method: 'POST',
+          body: formData,
+        })
+        if (!response.ok) {
+          const errBody = await response.json().catch(() => ({}))
+          throw new Error(describeApiError(errBody, response.status))
+        }
+        data = await response.json()
+      } else {
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: transcript }),
+        })
+        if (!response.ok) {
+          const errBody = await response.json().catch(() => ({}))
+          throw new Error(describeApiError(errBody, response.status))
+        }
+        data = await response.json()
+      }
+
+      // Voice turns post a placeholder before the audio is transcribed. Swap in
+      // the transcript Sarvam actually produced so the chat shows the question
+      // that was really asked and answered.
+      if (data.transcribed_text) {
+        setMessages((current) =>
+          current.map((msg) =>
+            msg.id === userMsgId ? { ...msg, text: data.transcribed_text } : msg
+          )
+        )
+      }
+
+      const receivedCitations = (data.citations || []).map((c, idx) => ({
+        id: idx + 1,
+        // document_id is a content hash, so using it as the heading rendered an
+        // unreadable 64-character string. Lead with the passage itself and keep
+        // the hash as a short, clearly-truncated reference.
+        title: buildCitationTitle(c, idx),
+        source: c.document_id
+          ? `MSMARCO-XI · doc ${String(c.document_id).slice(0, 8)}`
+          : 'MSMARCO-XI Knowledge Base',
+        // The API field is `score`; reading `similarity_score` never matched, so
+        // every card silently displayed a hardcoded 96%.
+        confidence: formatScore(c.score),
+        passage: c.text || c.chunk_text || c.passage || '',
+      }))
+
+      // Never substitute placeholder citations: an answer with no evidence must
+      // show none.
+      const finalCitations = receivedCitations
+
+      setMessages((current) => [
+        ...current,
+        {
+          id: `assistant-${Date.now()}`,
+          role: 'assistant',
+          time: getTime(),
+          text: data.answer,
+          citations: finalCitations,
+          audioBase64: data.audio_base64 || null,
+        },
+      ])
+
+      setActiveCitationId(finalCitations[0]?.id || 1)
+
+      // Auto-play synthesized voice response if received
+      if (data.audio_base64) {
+        playAudioBase64(data.audio_base64)
+      }
+    } catch (err) {
+      setMessages((current) => [
+        ...current,
+        {
+          id: `assistant-${Date.now()}`,
+          role: 'assistant',
+          time: getTime(),
+          text: `⚠️ ${err.message || 'Error communicating with backend'}`,
+          citations: [],
+        },
+      ])
+    } finally {
+      setIsProcessing(false)
+      setLatencyTick(Date.now())
+    }
   }
 
-  const playAnswer = (text) => {
+  const playAudioBase64 = (base64String) => {
+    try {
+      const audio = new Audio(`data:audio/wav;base64,${base64String}`)
+      audio.play().catch(() => {})
+    } catch {
+      // Fallback to speech synthesis
+    }
+  }
+
+  const playAnswer = async (text, audioBase64 = null) => {
+    if (audioBase64) {
+      playAudioBase64(audioBase64)
+      return
+    }
+    try {
+      const isHindi = /[\u0900-\u097F]/.test(text)
+      const response = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: text.slice(0, 400),
+          language: isHindi ? 'hi-IN' : 'en-IN',
+          voice: 'anushka',
+        }),
+      })
+      if (response.ok) {
+        const ttsData = await response.json()
+        if (ttsData.audio_base64) {
+          playAudioBase64(ttsData.audio_base64)
+          setLatencyTick(Date.now())
+          return
+        }
+      }
+    } catch {
+      // Fallback to browser SpeechSynthesis API
+    }
+
     window.speechSynthesis.cancel()
     const utterance = new SpeechSynthesisUtterance(text)
-    utterance.lang = 'en-IN'
+    utterance.lang = /[\u0900-\u097F]/.test(text) ? 'hi-IN' : 'en-IN'
     utterance.rate = 0.94
     window.speechSynthesis.speak(utterance)
   }
@@ -228,17 +401,28 @@ function App() {
               <aside className="grounding-drawer" aria-label="Citation passage drawer">
                 <div className="drawer-heading">
                   <p className="eyebrow">Grounding Drawer</p>
-                  <strong>Source [{activeCitation.id}]</strong>
-                  <span>{activeCitation.confidence}</span>
+                  <strong>{activeCitation ? `Source [${activeCitation.id}]` : 'No source selected'}</strong>
+                  <span>{activeCitation?.confidence ?? ''}</span>
                 </div>
-                <article className="passage-card">
-                  <span className="material-icons" aria-hidden="true">
-                    article
-                  </span>
-                  <h3>{activeCitation.title}</h3>
-                  <p className="source-name">{activeCitation.source}</p>
-                  <p>{activeCitation.passage}</p>
-                </article>
+                {activeCitation ? (
+                  <article className="passage-card">
+                    <span className="material-icons" aria-hidden="true">
+                      article
+                    </span>
+                    <h3>{activeCitation.title}</h3>
+                    <p className="source-name">{activeCitation.source}</p>
+                    <p>{activeCitation.passage}</p>
+                  </article>
+                ) : (
+                  <article className="passage-card">
+                    <span className="material-icons" aria-hidden="true">
+                      article
+                    </span>
+                    <p>
+                      Ask a question to see the retrieved passages that grounded the answer.
+                    </p>
+                  </article>
+                )}
               </aside>
             </div>
           </div>

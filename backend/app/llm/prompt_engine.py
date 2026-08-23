@@ -152,7 +152,9 @@ def build_grounded_rag_prompt(
         f"--------------------------------------------------\n"
         f"User Question: {clean_query}\n"
         f"Answer using ONLY the evidence passages above. If they do not contain the "
-        f"answer, say so plainly instead of answering from your own knowledge:"
+        f"answer, say so plainly instead of answering from your own knowledge. "
+        f"Do not append source or passage references to your answer; citations are "
+        f"attached separately by the system:"
     )
 
     return sys_prompt, user_prompt

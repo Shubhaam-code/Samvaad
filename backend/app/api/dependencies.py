@@ -24,8 +24,10 @@ Dependencies are intentionally provider-agnostic and overridable:
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
+from pathlib import Path
 from typing import Optional
 
 from app.guardrails.grounding_verifier import GroundingVerifier
@@ -392,6 +394,28 @@ def _build_resolver_from_records(records: list) -> "DictChunkResolver":
     return DictChunkResolver(chunks)
 
 
+def _read_index_model_name(index_dir: Path) -> Optional[str]:
+    """Read the embedding model a bare index was built with.
+
+    Args:
+        index_dir: Index directory containing schema.json
+
+    Returns:
+        The recorded model name, or None when it cannot be determined.
+    """
+    schema_path = index_dir / "schema.json"
+    if not schema_path.is_file():
+        return None
+    try:
+        with schema_path.open("r", encoding="utf-8") as fh:
+            schema = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        logger.warning("Could not read '%s'; skipping model compatibility check.", schema_path)
+        return None
+    name = schema.get("embedding_model_name")
+    return str(name) if name else None
+
+
 def get_orchestrator() -> Optional[RetrievalOrchestrator]:
     """Resolve the retrieval orchestrator wired to the persisted vector index.
 
@@ -452,6 +476,28 @@ def get_orchestrator() -> Optional[RetrievalOrchestrator]:
                 from app.vectorstore.numpy_store import NumpyVectorStore  # noqa: PLC0415
 
                 vector_store = NumpyVectorStore.load(index_dir)
+
+            # A bare index carries no manifest, so load_index()'s model
+            # compatibility check is skipped on this path. Validate the schema
+            # stamp explicitly: serving an index whose vectors came from a
+            # different embedder than the one encoding queries produces
+            # semantically meaningless neighbours at plausible-looking scores.
+            # A --dry-run index (FakeEmbedder, random vectors) is the case that
+            # actually reached production and went unnoticed for exactly this
+            # reason.
+            index_model = _read_index_model_name(index_dir)
+            if index_model is not None and index_model != settings.rag_embedding_model:
+                logger.error(
+                    "Index at '%s' was built with embedding model '%s' but queries "
+                    "are encoded with '%s'. Vectors from different models are not "
+                    "comparable, so retrieval would return arbitrary chunks. "
+                    "Refusing to serve it. Rebuild with: python -m scripts.build_full_index "
+                    "--lang hi --split validation (omit --dry-run, which uses FakeEmbedder).",
+                    index_dir,
+                    index_model,
+                    settings.rag_embedding_model,
+                )
+                return None
 
             resolver = _build_resolver_from_records(vector_store.records)
             if resolver.count == 0:

@@ -133,6 +133,16 @@ class LLMResponse(BaseModel):
         ge=0.0,
         description="Optional end-to-end latency in milliseconds",
     )
+    degraded: bool = Field(
+        False,
+        description=(
+            "True when the text is a synthetic fallback produced because the "
+            "provider was unavailable, not a real generation. Callers must not "
+            "treat degraded text as an answer: it carries no grounding in the "
+            "retrieved evidence and would otherwise be reported as an "
+            "ungrounded answer, disguising a provider outage as a hallucination."
+        ),
+    )
 
     @field_validator("text")
     @classmethod

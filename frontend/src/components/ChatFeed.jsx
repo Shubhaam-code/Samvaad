@@ -1,6 +1,12 @@
 import CitationCard from './CitationCard.jsx'
 
 function ChatFeed({ messages, activeCitationId, onCitationSelect, onPlayAnswer }) {
+  const latestCitations =
+    [...messages]
+      .reverse()
+      .find((message) => message.role === 'assistant' && message.citations?.length > 0)
+      ?.citations ?? []
+
   return (
     <section className="chat-panel" aria-label="Conversation history">
       <header className="panel-header">
@@ -55,18 +61,20 @@ function ChatFeed({ messages, activeCitationId, onCitationSelect, onPlayAnswer }
         ))}
       </div>
 
+      {/* Citations for the most recent answer only.
+          Previously this flat-mapped every assistant message and keyed cards by
+          citation.id, which is 1..5 per turn. Across turns those keys collided,
+          so React reused nodes and the cards rendered stacked on top of each
+          other. It also grew without bound as the conversation continued. */}
       <div className="citation-strip">
-        {messages
-          .filter((message) => message.role === 'assistant')
-          .flatMap((message) => message.citations)
-          .map((citation) => (
-            <CitationCard
-              active={activeCitationId === citation.id}
-              citation={citation}
-              key={citation.id}
-              onSelect={onCitationSelect}
-            />
-          ))}
+        {latestCitations.map((citation) => (
+          <CitationCard
+            active={activeCitationId === citation.id}
+            citation={citation}
+            key={`${citation.id}-${citation.source}`}
+            onSelect={onCitationSelect}
+          />
+        ))}
       </div>
     </section>
   )

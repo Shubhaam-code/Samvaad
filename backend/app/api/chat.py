@@ -189,6 +189,24 @@ def chat(
     llm_response = llm.generate(LLMRequest(prompt=user_prompt, system_prompt=sys_prompt))
     llm_ms = _ms(t_stage)
 
+    # A degraded response is the resilience harness's canned outage text, not a
+    # generation. Reporting it as an answer sent it through grounding, where it
+    # was flagged as unsupported - turning a provider rate limit into a
+    # misleading "ungrounded answer" verdict. Surface the outage instead.
+    if getattr(llm_response, "degraded", False):
+        record_error()
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "LLM_UNAVAILABLE",
+                "message": (
+                    "The language model provider is unavailable or rate limited, "
+                    "so no answer could be generated. This is a provider outage, "
+                    "not an ungrounded answer."
+                ),
+            },
+        )
+
     # Stage 6: post-generation grounding verification
     t_stage = time.perf_counter()
     evidence_chunks = [item.chunk for item in retrieval_result.retrieved_chunks]

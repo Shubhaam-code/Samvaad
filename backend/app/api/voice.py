@@ -253,6 +253,25 @@ async def voice_query(
         llm_ms = _ms(t_stage)
         answer_text = llm_response.text
 
+        # See chat.py: the harness's outage text is not a generation. Without
+        # this it reached the grounding verifier, failed, and surfaced as a 422
+        # UNGROUNDED_ANSWER, so a rate-limited provider looked like the
+        # hallucination guardrail firing.
+        if getattr(llm_response, "degraded", False):
+            record_error()
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "LLM_UNAVAILABLE",
+                    "transcribed_text": transcribed_text,
+                    "message": (
+                        "The language model provider is unavailable or rate limited, "
+                        "so no answer could be generated. This is a provider outage, "
+                        "not an ungrounded answer."
+                    ),
+                },
+            )
+
         # Stage 8: Post-generation Grounding Verification
         t_stage = time.perf_counter()
         evidence_chunks = [item.chunk for item in retrieval_result.retrieved_chunks]
